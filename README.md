@@ -19,7 +19,7 @@
 | **Lambda** | `Distillation` | Scheduler kiểm tra threshold |
 | **Lambda** | `Relabel` | Tự động gán nhãn lại conflict |
 | **Lambda** | `PrepareDistillationData` | Xuất CSV training data |
-| **Lambda** | `ExportONNX` | Convert LightGBM → ONNX |
+| **Lambda (Docker)** | `ExportONNX` | Convert LightGBM → ONNX |
 | **EventBridge** | CloudWatch Events | Trigger Distillation theo lịch |
 
 ---
@@ -103,7 +103,7 @@ anomalytraffic/
                    Model .txt → S3: models/lightgbm/
                               │
                               ▼
-                  Lambda: ExportONNX.py
+                  Lambda (Docker Image): ExportONNX
                   Convert LightGBM → ONNX
                               │
                               ▼
@@ -325,8 +325,8 @@ model.txt (S3: models/lightgbm/)
 4. Upload lên `s3://anomalytraffic/models/onnx/model_{timestamp}.onnx`
 
 > **Lưu ý triển khai ExportONNX:**
-> - `pip install` trong Lambda function sẽ **chậm** và có nguy cơ timeout
-> - **Khuyến nghị:** đóng gói thư viện vào Lambda Layer (lightgbm, onnxmltools, skl2onnx)
+> - Các thư viện như `numpy`, `scikit-learn`, `lightgbm`, và `onnxmltools` có dung lượng rất lớn, vượt quá giới hạn 250MB của Lambda Layer.
+> - **Bắt buộc:** Đóng gói hàm này thành Docker Container Image trước khi deploy lên AWS Lambda. (Xem chi tiết ở cấu hình cuối tài liệu).
 > - `FloatTensorType([None, 15])` — con số **15 features** phải khớp với số feature thực tế trong model của bạn
 
 ---
@@ -406,7 +406,7 @@ model.txt (S3: models/lightgbm/)
 
 2. **GSI `status-index`** trên bảng `AnomalyConflicts` **PHẢI** được tạo để các query hoạt động — DynamoDB không tự tạo index.
 
-3. **ExportONNX** nên dùng **Lambda Layer** thay vì `pip install` runtime — tránh cold start chậm và timeout.
+3. **ExportONNX** bắt buộc dùng **Docker Container Image** do giới hạn dung lượng 250MB của một hàm AWS Lambda.
 
 4. **Số feature trong ONNX** (`FloatTensorType([None, 15])`) phải khớp chính xác với số features thực tế trong Student model.
 
@@ -443,3 +443,51 @@ model.txt (S3: models/lightgbm/)
 ```
 
 ---
+
+## Phụ lục: Hướng dẫn triển khai Lambda ExportONNX sử dụng Docker Container
+
+Vì các thư viện như `numpy`, `scikit-learn`, `lightgbm`, và `onnxmltools` có dung lượng rất lớn, vượt quá giới hạn 250MB (unzipped size) của AWS Lambda (kể cả khi chia thành nhiều Layers hay upload qua S3), giải pháp tối ưu và "chuẩn chỉnh" nhất là **đóng gói tất cả vào một Docker Container Image**.
+
+AWS Lambda hỗ trợ Container Image với giới hạn lên tới **10 GB**, dư sức để chạy các thư viện Machine Learning nặng.
+
+### 📂 Cấu trúc thư mục (`ExportONNX_Docker/`)
+
+- `Dockerfile`: File cấu hình để build Docker Image dựa trên base image Lambda Python 3.12 của AWS.
+- `requirements.txt`: Danh sách các thư viện gộp (boto3, numpy, sklearn, onnx, lightgbm...).
+- `ExportONNX.py`: Code lambda function.
+- `build_and_push.ps1`: Script PowerShell tự động build và push Image lên Amazon ECR.
+
+### 🚀 Hướng dẫn Deploy ExportONNX
+
+#### Bước 1: Điều kiện tiên quyết
+1. Máy tính đã cài đặt **Docker Desktop** và đang chạy.
+2. Đã cài đặt **AWS CLI** và cấu hình tài khoản (có quyền ECR & Lambda).
+
+#### Bước 2: Chạy script Build & Push
+Mở **PowerShell**, di chuyển vào đúng thư mục `ExportONNX_Docker` và chạy lệnh sau:
+
+```powershell
+./build_and_push.ps1
+```
+
+Script này sẽ tự động:
+1. Đăng nhập vào Amazon ECR (Elastic Container Registry).
+2. Tạo ECR Repository có tên `export-onnx-lambda` (nếu chưa có).
+3. Build Docker container chứa code và toàn bộ các thư viện nặng.
+4. Push container lên AWS ECR.
+
+#### Bước 3: Tạo/Cập nhật AWS Lambda Function lấy nguồn từ Container
+1. Truy cập [AWS Lambda Console](https://console.aws.amazon.com/lambda/).
+2. Chọn **Create function**.
+3. Chọn tùy chọn **Container image** (thay vì "Author from scratch").
+4. Đặt tên Hàm (ví dụ: `ExportONNXFunction`).
+5. Ở mục **Container image URI**, nhấn **Browse images**, chọn repo `export-onnx-lambda` vừa push và chọn tag `latest`.
+6. Nhấn **Create function**.
+
+*Lưu ý: Nếu Lambda cần thêm quyền S3, hãy vào tab **Configuration** > **Permissions** để thêm IAM role cho nó. Cấp Memory cho function lớn một chút (ví dụ 1024MB - 2048MB) để quá trình convert model không bị lỗi Out of Memory.*
+
+#### Bước 4 (Optional): Cập nhật function khi thay đổi code
+Nếu bạn sửa code trong `ExportONNX.py`, bạn chỉ cần chạy lại `./build_and_push.ps1`. Sau đó vào AWS Lambda Console:
+1. Vào function của bạn.
+2. Tại tab **Image configuration**, nhấn **Deploy new image**.
+3. Chọn lại image name: `export-onnx-lambda:latest` và nhấn **Save**.

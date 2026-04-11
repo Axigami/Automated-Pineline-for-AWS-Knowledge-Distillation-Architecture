@@ -1,7 +1,10 @@
 import boto3
 import os
-import subprocess
 import json
+
+import lightgbm as lgb
+from onnxmltools.convert import convert_lightgbm
+from onnxmltools.convert.common.data_types import FloatTensorType
 
 s3 = boto3.client('s3')
 
@@ -11,7 +14,13 @@ ONNX_PREFIX = 'models/onnx/'
 
 def lambda_handler(event, context):
     """
-    Convert LightGBM model to ONNX format
+    Convert LightGBM model to ONNX format.
+    
+    Requires Lambda Layers:
+      - numpy + scikit-learn
+      - onnx + skl2onnx
+      - lightgbm + onnxmltools
+    Compatible runtime: Python 3.12 x86_64
     """
     
     print("🔄 Converting LightGBM to ONNX...")
@@ -41,21 +50,6 @@ def lambda_handler(event, context):
     # Download model
     local_model = '/tmp/model.txt'
     s3.download_file(BUCKET, model_key, local_model)
-    
-    # Install dependencies (if not in layer)
-    subprocess.run([
-        'pip', 'install', 
-        'lightgbm', 'onnxmltools', 'skl2onnx', 
-        '--target', '/tmp/libs',
-        '--quiet'
-    ])
-    
-    import sys
-    sys.path.insert(0, '/tmp/libs')
-    
-    import lightgbm as lgb
-    from onnxmltools.convert import convert_lightgbm
-    from onnxmltools.convert.common.data_types import FloatTensorType
     
     # Load LightGBM model
     booster = lgb.Booster(model_file=local_model)
