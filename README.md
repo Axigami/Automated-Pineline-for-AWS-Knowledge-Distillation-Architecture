@@ -140,7 +140,6 @@ predictor = model.deploy(
     instance_type="ml.m5.large",
     endpoint_name="tf-endpoint"
 )
-![alt text](image.png)
 ```
 
 **Quy trình:**
@@ -164,6 +163,8 @@ predictor = model.deploy(
 > - `framework_version="2.12"` phải tương thích với TensorFlow version dùng khi training
 > - Quá trình deploy thường mất **3–5 phút** — script sẽ block và chờ đến khi endpoint `InService`
 > - IAM Role cần có permission: `sagemaker:CreateModel`, `sagemaker:CreateEndpointConfig`, `sagemaker:CreateEndpoint`, và `s3:GetObject` trên bucket `anomalytraffic`
+
+![SageMaker UI — Deploy Endpoint](SagemakerUI.png)
 
 ---
 
@@ -196,6 +197,8 @@ Nguồn log      → Dự đoán Attack     CONFLICT (model báo nhầm lưu lư
 6. Ghi **tất cả kết quả** vào DynamoDB (AnomalyPredictions / LogPredictions)
 7. Ghi **conflict** riêng vào `AnomalyConflicts` với `status: "pending"`
 8. Lưu file kết quả tổng hợp `*_pred.json` vào S3 `predictions/`
+
+![Lambda Functions — Inference & Conflict Detection](Lambda.png)
 
 ---
 
@@ -382,6 +385,8 @@ model.txt (S3: models/lightgbm/)
 | `needs_manual_review` | Boolean | True nếu cần xem xét thủ công |
 
 > **GSI cần tạo:** `status-index` với partition key là `status` — bắt buộc cho Relabel.py và Distillation.py
+
+![DynamoDB — Cấu trúc bảng AnomalyConflicts](DynamoDB.png)
 
 ### Bảng `AnomalyPredictions` / `LogPredictions`
 
