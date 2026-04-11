@@ -38,8 +38,8 @@ anomalytraffic/
 │   ├── anomalyprediction/      ← Kết quả dự đoán của mô hình cloud từ luồng anomaly
 │   └── logprediction/          ← Kết quả dự đoán của mô hình cloud từ luồng log
 ├── models/
-│   ├── lightgbm/               ← Student model sau khi train (file .txt)
-│   └── onnx/                   ← Model đã convert sang ONNX
+│   ├── cloud/                  ← Teacher model artifact (model.tar.gz — TF SavedModel)
+│   └── edge/                   ← Student model sau khi train (ONNX / LightGBM)
 └── scripts/                    ← Lambda deployment packages
 ```
 
