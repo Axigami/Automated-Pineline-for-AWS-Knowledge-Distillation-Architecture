@@ -16,9 +16,9 @@
 | **SageMaker Endpoint** | `tf-endpoint` | Mô hình Teacher chạy inference |
 | **Script** | `DeployCloudmodel.py` | Tạo & deploy SageMaker Endpoint từ model đã train |
 | **Lambda** | `IOT-PROJECT` | Inference của mô hình cloud + phát hiện conflict |
-| **Lambda** | `Distillation` | Scheduler kiểm tra threshold |
+| **Lambda** | `Distillation` | Scheduler kiểm tra threshold kích hoạt Relabel |
 | **Lambda** | `Relabel` | Tự động gán nhãn lại conflict |
-| **Lambda** | `PrepareDistillationData` | Xuất CSV training data |
+| **Lambda** | `PrepareDistillationData` | Xuất CSV training data kích hoạt distillation |
 | **Lambda (Docker)** | `ExportONNX` | Convert LightGBM → ONNX |
 | **EventBridge** | CloudWatch Events | Trigger Distillation theo lịch |
 
@@ -314,7 +314,245 @@ model.txt (S3: models/lightgbm/)
 
 ---
 
-### Bước 6 — Xuất ONNX (`ExportONNX.py`)
+### Bước 5.1 — Fine-tune Teacher Model (`finetune/FineTuneTeacher.py`)
+
+**Mục đích:** Cập nhật mô hình Teacher (CNN) với dữ liệu mới từ conflict data đã được gán nhãn lại. Quy trình này giúp Teacher model học những case khó mà nó từng bị sai.
+
+**Kích hoạt:**
+- Manual: Chạy SageMaker Training Job với Docker image từ `finetune/Dockerfile`
+- Automated: Có thể được gọi từ một EventBridge trigger hoặc orchestration pipeline
+
+**Cấu trúc folder `finetune/`:**
+```
+finetune/
+├── FineTuneTeacher.py    ← Script chính
+└── Dockerfile            ← Docker image (Python 3.10 + TensorFlow 2.13)
+```
+
+**Quy trình Fine-tune:**
+
+1. **Load Training Data**
+   - Lấy CSV từ input channel (thường từ S3 → SageMaker channel)
+   - Trích xuất features (columns bắt đầu bằng `feature_`) và label
+   - Làm đệm/cắt ngắn đến 75 features, reshape thành `(N, 75, 1)`
+
+2. **Load Teacher Model**
+   - Download `model.tar.gz` từ S3 (`s3://anomalytraffic/models/cloud/`)
+   - Extract và load TensorFlow SavedModel
+
+3. **Baseline Evaluation**
+   - Đánh giá accuracy của mô hình cũ trên validation set
+   - In ra per-class accuracy cho từng lớp: Benign, Botnet, DDoS, DoS, PortScan
+
+4. **Fine-tune**
+   - Unfreeze toàn bộ layers
+   - Compile với Adam optimizer (learning rate mặc định: `1e-4`)
+   - Callbacks: EarlyStopping (patience=3), ReduceLROnPlateau (factor=0.5, patience=2)
+   - Epochs mặc định: 10
+
+5. **Compare Accuracy**
+   - Tính improvement = `accuracy_after - accuracy_before`
+   - Yêu cầu tối thiểu improvement: `--min-improvement` (mặc định: 0.001 = 0.1%)
+   - **Nếu improvement >= threshold:**
+     - ✅ Upload model.tar.gz mới lên S3
+     - 💾 Backup model cũ vào `models/cloud/backups/`
+     - 🔄 Update SageMaker Endpoint (blue-green deployment)
+     - 🚀 Trigger Lambda `TriggerDistillation` để bắt đầu distillation pipeline
+   - **Nếu improvement < threshold:**
+     - ⚠️ Giữ model cũ, không upload model mới
+     - Pipeline dừng
+
+6. **Report**
+   - Lưu JSON report chứa: accuracy_before, accuracy_after, improvement, accepted flag
+   - Upload report lên S3: `models/cloud/reports/finetune_*.json`
+
+**Biến Môi Trường:**
+
+| Tên biến | Ví dụ | Mô tả |
+|---|---|---|
+| `BUCKET` | `anomalytraffic` | S3 bucket chứa model |
+| `TEACHER_ENDPOINT` | `tf-endpoint` | Tên SageMaker endpoint (dùng để update) |
+| `DISTILL_FUNCTION` | `TriggerDistillation` | Lambda function trigger distillation |
+| `SM_CHANNEL_TRAINING` | `/opt/ml/processing/input` | Input directory (SageMaker channel) |
+| `SM_MODEL_DIR` | `/opt/ml/model` | Output directory cho model |
+| `SM_OUTPUT_DATA_DIR` | `/opt/ml/output/data` | Output directory cho data/report |
+| `SAGEMAKER_ROLE` | `arn:aws:iam::...` | IAM role có permission SageMaker |
+
+**Command Line Arguments:**
+
+```bash
+python FineTuneTeacher.py \
+  --epochs 10 \
+  --batch-size 32 \
+  --learning-rate 1e-4 \
+  --min-improvement 0.001
+```
+
+| Tham số | Mặc định | Mô tả |
+|---|---|---|
+| `--epochs` | `10` | Số epoch fine-tune |
+| `--batch-size` | `32` | Batch size |
+| `--learning-rate` | `1e-4` | Learning rate |
+| `--min-improvement` | `0.001` | Yêu cầu improvement tối thiểu |
+
+**Cách chạy trên SageMaker:**
+
+```python
+from sagemaker.estimator import Estimator
+
+estimator = Estimator(
+    image_uri="<ECR_ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com/distillation-finetune:latest",
+    role="arn:aws:iam::<ACCOUNT>:role/<ROLE>",
+    instance_count=1,
+    instance_type="ml.p3.2xlarge",  # Cần GPU
+    output_path="s3://anomalytraffic/models/cloud/",
+    environment={
+        'BUCKET': 'anomalytraffic',
+        'TEACHER_ENDPOINT': 'tf-endpoint',
+        'DISTILL_FUNCTION': 'TriggerDistillation',
+        'SAGEMAKER_ROLE': '<ROLE_ARN>'
+    }
+)
+
+estimator.fit(
+    inputs="s3://anomalytraffic/data/distillation/train/",
+    job_name="finetune-teacher-20260411"
+)
+```
+
+---
+
+### Bước 5.2 — Knowledge Distillation: Train Student Model (`distill/IOT-PROJECT.py`)
+
+**Mục đích:** Huấn luyện mô hình Student nhỏ gọn (LightGBM) với "soft labels" từ Teacher model. Mục đích là học những trường hợp khó mà Teacher bị sai, nhưng với chi phí inference thấp hơn trên edge device.
+
+**Kích hoạt:**
+- Manual: Chạy SageMaker Training Job với Docker image từ `distill/Dockerfile`
+- Automatic: Được gọi sau khi `FineTuneTeacher.py` hoàn thành (nếu accepted)
+
+**Cấu trúc folder `distill/`:**
+```
+distill/
+├── IOT-PROJECT.py    ← Script chính (tên này theo naming convention)
+└── Dockerfile        ← Docker image (Python 3.10 + LightGBM 4.0)
+```
+
+**Quy trình Distillation:**
+
+1. **Load Training Data**
+   - Lấy CSV từ input channel
+   - Trích xuất features (columns `feature_*`)
+   - Không cần label cứng (hard labels) — soft labels sẽ từ Teacher
+
+2. **Get Soft Labels từ Teacher Endpoint**
+   - Call SageMaker `tf-endpoint` với batches của 100 samples
+   - Teacher output: xác suất 5 classes → `(N, 5)`
+   - **Temperature Scaling** (T = 3.0 mặc định):
+     - Softens probabilities: `logits = log(probs) / T`
+     - Làm mô hình Student học được sự *không chắc chắn* của Teacher
+   - Extract soft label cho class cần học (ví dụ: class 1 = Attack)
+
+3. **Train/Val Split**
+   - 80% training, 20% validation
+
+4. **Train LightGBM**
+   - Params:
+     - `num_leaves`: 127 (mặc định)
+     - `max_depth`: 6
+     - `learning_rate`: 0.05
+     - `n_estimators`: 400
+   - Objective: binary classification (regression on soft labels)
+   - Metrics: binary_logloss, AUC
+   - Early stopping: patience=30
+
+5. **Evaluate**
+   - Tính ROC-AUC trên validation set
+   - Tính accuracy (với threshold 0.5)
+
+6. **Save & Upload**
+   - **Local saves:**
+     - `student_lgbm.txt` — LightGBM text format (nhỏ gọn, 1-2 MB)
+     - `student_lgbm.pkl` — Pickle format (dùng để load ngay trong Python)
+     - `metadata.json` — Metadata (feature names, accuracy, best_iteration, etc.)
+   - **Upload to S3:** `s3://anomalytraffic/models/edge/lightgbm/`
+
+7. **Trigger ExportONNX**
+   - Async invoke Lambda `ExportONNX`
+   - Convert `student_lgbm.txt` → ONNX format
+   - ONNX model sẽ available at `s3://anomalytraffic/models/onnx/`
+
+**Biến Môi Trường:**
+
+| Tên biến | Ví dụ | Mô tả |
+|---|---|---|
+| `BUCKET` | `anomalytraffic` | S3 bucket |
+| `TEACHER_ENDPOINT` | `tf-endpoint` | SageMaker endpoint của Teacher |
+| `EXPORT_FUNCTION` | `ExportONNX` | Lambda function export ONNX |
+| `SM_CHANNEL_TRAINING` | `/opt/ml/processing/input` | Input directory |
+| `SM_MODEL_DIR` | `/opt/ml/model` | Model output directory |
+| `SM_OUTPUT_DATA_DIR` | `/opt/ml/output/data` | Data output directory |
+
+**Command Line Arguments:**
+
+```bash
+python IOT-PROJECT.py \
+  --num-leaves 127 \
+  --max-depth 6 \
+  --learning-rate 0.05 \
+  --n-estimators 400 \
+  --temperature 3.0 \
+  --task binary
+```
+
+| Tham số | Mặc định | Mô tả |
+|---|---|---|
+| `--num-leaves` | `127` | Số leaf nodes trong LightGBM |
+| `--max-depth` | `6` | Độ sâu tối đa |
+| `--learning-rate` | `0.05` | Learning rate |
+| `--n-estimators` | `400` | Số boosting rounds |
+| `--temperature` | `3.0` | Temperature scaling cho soft labels |
+| `--use-soft-labels` | `true` | Dùng soft labels từ Teacher |
+| `--task` | `binary` | `binary` hoặc `multiclass` |
+
+**Cách chạy trên SageMaker:**
+
+```python
+from sagemaker.estimator import Estimator
+
+estimator = Estimator(
+    image_uri="<ECR_ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com/distillation-student:latest",
+    role="arn:aws:iam::<ACCOUNT>:role/<ROLE>",
+    instance_count=1,
+    instance_type="ml.m5.xlarge",  # Không cần GPU
+    output_path="s3://anomalytraffic/models/edge/",
+    environment={
+        'BUCKET': 'anomalytraffic',
+        'TEACHER_ENDPOINT': 'tf-endpoint',
+        'EXPORT_FUNCTION': 'ExportONNX'
+    }
+)
+
+estimator.fit(
+    inputs="s3://anomalytraffic/data/distillation/train/",
+    job_name="distillation-student-20260411"
+)
+```
+
+**So sánh Teacher vs Student:**
+
+| Đặc điểm | Teacher (CNN) | Student (LightGBM) |
+|---|---|---|
+| Framework | TensorFlow | LightGBM (tree-based) |
+| Model size | ~50-100 MB | **1-2 MB** |
+| Inference time | 50-100 ms | **1-5 ms** |
+| Accuracy | ~95%+ | ~90-94% (accept trade-off) |
+| Training cost | Cao (GPU) | Thấp (CPU) |
+| Deployment | Cloud (SageMaker) | Edge device (ONNX) |
+| Soft labels | ✅ Output dùng cho distillation | ❌ Input để học từ Teacher |
+
+---
+
+### Bước 7 — Xuất ONNX (`ExportONNX.py`)
 
 **Trigger:** Manual hoặc auto sau khi SageMaker Training Job hoàn thành
 

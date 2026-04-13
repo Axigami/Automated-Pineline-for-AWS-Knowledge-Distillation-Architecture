@@ -9,7 +9,7 @@ from onnxmltools.convert.common.data_types import FloatTensorType
 s3 = boto3.client('s3')
 
 BUCKET = os.environ.get('BUCKET', 'anomalytraffic')
-MODEL_PREFIX = 'models/lightgbm/'
+MODEL_PREFIX = 'models/edge/lightgbm/'
 ONNX_PREFIX = 'models/onnx/'
 
 def lambda_handler(event, context):
