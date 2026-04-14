@@ -16,11 +16,13 @@
 | **SageMaker Endpoint** | `tf-endpoint` | Mô hình Teacher chạy inference |
 | **Script** | `DeployCloudmodel.py` | Tạo & deploy SageMaker Endpoint từ model đã train |
 | **Lambda** | `IOT-PROJECT` | Inference của mô hình cloud + phát hiện conflict |
-| **Lambda** | `Distillation` | Scheduler kiểm tra threshold kích hoạt Relabel |
+| **Lambda** | `Distillation` | Scheduler kiểm tra ngưỡng kích hoạt Relabel |
 | **Lambda** | `Relabel` | Tự động gán nhãn lại conflict |
-| **Lambda** | `PrepareDistillationData` | Xuất CSV training data kích hoạt distillation |
+| **Lambda** | `PrepareDistillationData` | Xuất CSV data training và gọi hàm Fine-Tune |
+| **Lambda** | `Triggerfinetuning` | Khởi chạy SageMaker Training Job: Fine-Tune Teacher |
+| **Lambda** | `TriggerDistillation` | Khởi chạy SageMaker Training Job: Distillation Student |
 | **Lambda (Docker)** | `ExportONNX` | Convert LightGBM → ONNX |
-| **EventBridge** | CloudWatch Events | Trigger Distillation theo lịch |
+| **EventBridge** | CloudWatch Events | Trigger `Distillation.py` định kỳ (Hourly) |
 
 ---
 
@@ -69,39 +71,39 @@ anomalytraffic/
 
                               │
                     ┌─────────┴──────────┐
-                    │  EventBridge       │ (mỗi N giờ / ngày)
+                    │  EventBridge       │ (Scheduled Cronjob)
                     │  → Lambda          │
                     │  Distillation.py   │
                     └─────────┬──────────┘
                               │ count >= THRESHOLD?
-                              │ YES
+                              │ YES (async invoke)
                               ▼
                        Lambda: Relabel.py
-                       (async invoke)
-                              │
-                    ┌─────────┴──────────┐
-                    │  Gán nhãn tự động  │
-                    │  → status:         │
-                    │    relabeled       │
-                    │    (high/low conf) │
-                    └─────────┬──────────┘
-                              │ (trigger tiếp theo — manual hoặc EventBridge khác)
+                              │ (async invoke khi hoàn tất)
                               ▼
                   Lambda: PrepareDistillationData.py
-                  Query AnomalyConflicts WHERE
-                  status='relabeled' AND relabel_confidence='high'
+                  Query AnomalyConflicts WHERE status='relabeled' AND relabel_confidence='high'
                               │
                               ▼
-                   Xuất CSV → S3:
-                   data/distillation/train/distillation_train_*.csv
+                   Xuất CSV → S3: data/distillation/train/
+                              │ (async invoke)
+                              ▼
+                   Lambda: Triggerfinetuning.py
+                              │ (Tạo Training Job)
+                              ▼
+                 [SageMaker Fine-Tune Teacher CNN]
+                 (Nếu model improve -> Cập nhật Endpoint)
+                              │ (async invoke từ chính Code SageMaker)
+                              ▼
+                  Lambda: TriggerDistillation.py
+                              │ (Tạo Training Job)
+                              ▼
+                  [SageMaker Distillation LightGBM]
+                  (Dùng soft-labels học từ Teacher)
                               │
                               ▼
-                  [Train LightGBM Student Model]
-                  (SageMaker Training Job hoặc EC2)
-                              │
-                              ▼
-                   Model .txt → S3: models/lightgbm/
-                              │
+                   Model .txt → S3: models/edge/lightgbm/
+                              │ (async invoke từ chính Code SageMaker)
                               ▼
                   Lambda (Docker Image): ExportONNX
                   Convert LightGBM → ONNX
@@ -159,10 +161,11 @@ predictor = model.deploy(
 | `endpoint_name` | `tf-endpoint` | Tên endpoint — **phải khớp** với biến `SAGEMAKER_ENDPOINT` trong Lambda |
 
 > **Lưu ý quan trọng:**
-> - Model artifact phải được đóng gói đúng định dạng TensorFlow SavedModel: `model.tar.gz` chứa thư mục `1/` (hoặc `00001/`) bên trong
-> - `framework_version="2.12"` phải tương thích với TensorFlow version dùng khi training
-> - Quá trình deploy thường mất **3–5 phút** — script sẽ block và chờ đến khi endpoint `InService`
-> - IAM Role cần có permission: `sagemaker:CreateModel`, `sagemaker:CreateEndpointConfig`, `sagemaker:CreateEndpoint`, và `s3:GetObject` trên bucket `anomalytraffic`
+> - Model artifact phải được đóng gói đúng định dạng TensorFlow SavedModel: `model.tar.gz` chứa thư mục `1/` (hoặc `00001/`) bên trong.
+> - **CỰC KỲ QUAN TRỌNG ĐỂ CÓ THỂ FINE-TUNE:** Mô hình ban đầu phải được lưu bằng lệnh của Keras (`model.save("1")` hoặc `tf.keras.models.save_model(...)`) chứ **tuyệt đối không dùng** `tf.saved_model.save()`. Nếu thiếu hệ thống metadata gốc của Keras (file `keras_metadata.pb`), hệ thống chỉ có thể chạy Live Inference nhưng sẽ văng lỗi khi cố gắng Unfreeze để Fine-Tune (vì nó bị biến thành base `_UserObject`).
+> - `framework_version="2.12"` phải tương thích với TensorFlow version dùng khi training.
+> - Quá trình deploy thường mất **3–5 phút** — script sẽ block và chờ đến khi endpoint `InService`.
+> - IAM Role cần có permission: `sagemaker:CreateModel`, `sagemaker:CreateEndpointConfig`, `sagemaker:CreateEndpoint`, và `s3:GetObject` trên bucket `anomalytraffic`.
 
 ![SageMaker UI — Deploy Endpoint](SagemakerUI.png)
 
@@ -256,7 +259,7 @@ Nguồn log      → Dự đoán Attack     CONFLICT (model báo nhầm lưu lư
 
 ### Bước 4 — Tổng Hợp Data Training (`PrepareDistillationData.py`)
 
-**Trigger:** Thủ công hoặc EventBridge sau khi Relabel xong
+**Trigger:** Tự động bằng async `lambda_client.invoke` do `Relabel.py` bắn ra ngay khi nó hoàn thành.
 
 **Biến môi trường cần thiết:**
 
@@ -274,6 +277,7 @@ Nguồn log      → Dự đoán Attack     CONFLICT (model báo nhầm lưu lư
    - Tạo row CSV: `{label: N, ...flow_features}`
 4. Ghi CSV vào `/tmp/` rồi upload lên S3: `data/distillation/train/distillation_train_YYYYMMDD_HHMMSS.csv`
 5. **Mark conflicts đã dùng**: cập nhật `status = "used"` để không train lại
+6. **Trigger Pipeline tiếp theo**: Hàm Lambda tự động gọi `Triggerfinetuning.py` (async) để báo hiệu cho SageMaker chuẩn bị train.
 
 > **Lưu ý quan trọng về data chưng cất:**
 > - Chỉ lấy `relabel_confidence = "high"` → loại bỏ các case cần review thủ công
@@ -319,8 +323,7 @@ model.txt (S3: models/lightgbm/)
 **Mục đích:** Cập nhật mô hình Teacher (CNN) với dữ liệu mới từ conflict data đã được gán nhãn lại. Quy trình này giúp Teacher model học những case khó mà nó từng bị sai.
 
 **Kích hoạt:**
-- Manual: Chạy SageMaker Training Job với Docker image từ `finetune/Dockerfile`
-- Automated: Có thể được gọi từ một EventBridge trigger hoặc orchestration pipeline
+- Tự động hoàn toàn (Automated): Được API của hàm Lambda `Triggerfinetuning.py` tạo ngay lập tức khi `PrepareDistillationData` ra được CSV mới.
 
 **Cấu trúc folder `finetune/`:**
 ```
@@ -338,7 +341,8 @@ finetune/
 
 2. **Load Teacher Model**
    - Download `model.tar.gz` từ S3 (`s3://anomalytraffic/models/cloud/`)
-   - Extract và load TensorFlow SavedModel
+   - Extract và load TensorFlow SavedModel thông qua Keras (`tf.keras.models.load_model`)
+   - **Lưu ý:** Chỉ load thành công để train tiếp nếu mô hình trước đó có file `keras_metadata.pb` (được đóng gói từ mã nguồn gốc bằng lệnh `model.save()`).
 
 3. **Baseline Evaluation**
    - Đánh giá accuracy của mô hình cũ trên validation set
@@ -427,8 +431,7 @@ estimator.fit(
 **Mục đích:** Huấn luyện mô hình Student nhỏ gọn (LightGBM) với "soft labels" từ Teacher model. Mục đích là học những trường hợp khó mà Teacher bị sai, nhưng với chi phí inference thấp hơn trên edge device.
 
 **Kích hoạt:**
-- Manual: Chạy SageMaker Training Job với Docker image từ `distill/Dockerfile`
-- Automatic: Được gọi sau khi `FineTuneTeacher.py` hoàn thành (nếu accepted)
+- Tự động hoàn toàn (Automated): Do Hàm Lambda `TriggerDistillation.py` (được gọi từ Script `FineTuneTeacher.py` nếu đáp ứng ngưỡng improvement) kích hoạt.
 
 **Cấu trúc folder `distill/`:**
 ```
@@ -554,7 +557,7 @@ estimator.fit(
 
 ### Bước 7 — Xuất ONNX (`ExportONNX.py`)
 
-**Trigger:** Manual hoặc auto sau khi SageMaker Training Job hoàn thành
+**Trigger:** Tự động hoàn toàn: Function `ExportONNX` được gọi Async trực tiếp từ những giây cuối cùng của script huấn luyện chạy trong SageMaker Distillation (`distill/IOT-PROJECT.py`).
 
 **Quy trình:**
 1. Tìm model LightGBM mới nhất trong `s3://anomalytraffic/models/lightgbm/`
@@ -650,7 +653,7 @@ estimator.fit(
 
 5. **PrepareDistillationData** chỉ query `relabel_confidence = 'high'` thông qua **FilterExpression**, không phải KeyCondition — DynamoDB sẽ scan toàn bộ `relabeled` items trước khi filter. Nếu dataset lớn, nên tạo thêm GSI compound: `(relabel_confidence, status)`.
 
-6. **Distillation.py** chỉ invoke Relabel async — bạn cần tự kích hoạt `PrepareDistillationData` sau khi Relabel xong (qua EventBridge hoặc Step Functions).
+6. **Hoạt động liên hoàn 100% không đứt đoạn**: Các bước từ Distillation đếm File 👉 Relabel 👉 Chuẩn bị CSV 👉 FineTune (SageMaker) 👉 Distillation (SageMaker) 👉 Export ONNX đều **chuyền tay nhau** một cách bất đồng bộ (`async API`). Sự kiện EventBridge phụ trợ theo dõi SageMaker Completion đã được loại bỏ để **tránh Double Execution (Luồng bị chạy 2 lần)**.
 
 7. **Chi phí SageMaker Endpoint:** Instance `ml.m5.large` tính phí theo giờ ngay cả khi không có request — nên **delete endpoint** khi không cần dùng và redeploy bằng `DeployCloudmodel.py` khi cần.
 
@@ -677,7 +680,9 @@ estimator.fit(
                     ▼
           status: "used"
           → Đã xuất vào CSV training
-          → Không được dùng lại
+          → Triggerfinetuning đẩy vào SageMaker (Teacher)
+          → TriggerDistillation đẩy vào SageMaker (Student)
+          → ExportONNX xuất file cho Edge Device!
 ```
 
 ---
