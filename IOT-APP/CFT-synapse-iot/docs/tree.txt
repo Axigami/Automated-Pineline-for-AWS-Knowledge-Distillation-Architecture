@@ -1,0 +1,65 @@
+synapse-iot/                                        # Root dự án
+│
+├── 📁 public/                                      # Static assets (Vite tự phục vụ)
+│   └── logo_white.png                             # Logo ứng dụng (truy cập qua /logo_white.png)
+│
+├── 📁 src/                                         # Source code chính
+│   ├── App.tsx                                    # Root component (import từ module barrels)
+│   ├── main.tsx                                   # Entry point
+│   ├── index.css                                  # Global styles
+│   │
+│   ├── core/                                      # Infrastructure dùng chung
+│   │   ├── controllers/                           # Global hooks, API client config
+│   │   ├── models/                                # Global state, Auth DTOs
+│   │   ├── views/layouts/                         # Base layouts (Sidebar, Navbar...)
+│   │   └── index.ts
+│   │
+│   ├── modules/                                   # Tầng nghiệp vụ - Feature modules
+│   │   ├── dashboard/
+│   │   │   ├── view/components/DashboardOverview.tsx
+│   │   │   ├── view/index.ts
+│   │   │   └── index.ts                          # Public API của module
+│   │   ├── live-monitor/
+│   │   │   ├── view/components/LiveMonitor.tsx
+│   │   │   ├── view/index.ts
+│   │   │   └── index.ts
+│   │   ├── threat-analytics/
+│   │   │   ├── view/components/ThreatAnalytics.tsx
+│   │   │   ├── view/index.ts
+│   │   │   └── index.ts
+│   │   ├── model-insights/
+│   │   │   ├── view/components/ModelInsights.tsx
+│   │   │   ├── view/index.ts
+│   │   │   └── index.ts
+│   │   ├── mlops/
+│   │   │   ├── view/components/MLOpsHub.tsx
+│   │   │   ├── view/components/ModelRetraining.tsx
+│   │   │   ├── view/index.ts
+│   │   │   └── index.ts
+│   │   ├── fleet-mgmt/
+│   │   │   ├── view/components/EdgeFleetManagement.tsx
+│   │   │   ├── view/index.ts
+│   │   │   └── index.ts
+│   │   ├── reports/
+│   │   │   ├── view/components/ReportingAuditLogs.tsx
+│   │   │   ├── view/index.ts
+│   │   │   └── index.ts
+│   │   └── settings/
+│   │       ├── view/components/SettingsThresholds.tsx
+│   │       ├── view/index.ts
+│   │       └── index.ts
+│   │
+│   └── utils/                                     # Helpers, Constants dùng chung
+│
+├── 📁 docs/                                        # Tài liệu dự án
+│   ├── tree.txt                                   # Cấu trúc thư mục (file này)
+│   └── metadata.json                              # Metadata mô tả app
+│
+│── .env.example                                   # Mẫu biến môi trường (cam kết vào git)
+├── .gitignore
+├── index.html                                     # Vite entry point HTML
+├── package.json
+├── package-lock.json
+├── tsconfig.json
+├── vite.config.ts
+└── README.md                                      # Tài liệu chính (GitHub convention)

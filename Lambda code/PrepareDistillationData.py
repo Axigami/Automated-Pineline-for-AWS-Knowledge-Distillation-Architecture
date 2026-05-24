@@ -151,12 +151,15 @@ def lambda_handler(event, context):
     # Build CSV rows
     # ========================================
     
+    # Updated for 7-class model
     label_map = {
         'Benign': 0,
         'Botnet': 1,
-        'DDoS': 2,
-        'DoS': 3,
-        'PortScan': 4
+        'BruteForce': 2,
+        'DDoS': 3,
+        'DoS': 4,
+        'PortScan': 5,
+        'WebAttack': 6
     }
     
     # Load Scaler from S3 to know exactly what features are required and to standardize them

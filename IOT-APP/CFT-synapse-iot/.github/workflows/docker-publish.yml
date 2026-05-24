@@ -1,0 +1,126 @@
+name: 🐳 Build & Push to Docker Hub
+
+# ──────────────────────────────────────────────────────────
+#  Trigger: push lên branch main hoặc master
+#  Hoặc tạo tag version: v1.0.0, v2.3.1, ...
+# ──────────────────────────────────────────────────────────
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - main
+      - master
+
+env:
+  # Đổi thành Docker Hub username/repo-name của bạn
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/cft-synapse-iot
+
+jobs:
+  # ── Job 1: Lint / Type-check ────────────────────────────
+  lint:
+    name: 🔍 Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript check
+        run: npm run lint
+
+  # ── Job 2: Build Docker image & push ───────────────────
+  build-and-push:
+    name: 🏗️ Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: lint               # Chỉ chạy nếu lint pass
+    # Chỉ push khi push vào main/master hoặc tag (không push khi PR)
+    if: github.event_name != 'pull_request'
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── Setup QEMU để build multi-arch (amd64 + arm64) ──
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # ── Buildx để build multi-platform ──────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Đăng nhập Docker Hub ────────────────────────────
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── Tạo metadata: tags + labels tự động ─────────────
+      # Push main  → tag: latest + sha-xxxxxxx
+      # Push tag   → tag: v1.0.0 + 1.0.0 + 1.0 + latest
+      - name: Extract Docker metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
+
+      # ── Build & Push ─────────────────────────────────────
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Truyền secrets vào build-arg để Vite embed vào bundle
+          build-args: |
+            VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
+            VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
+            VITE_API_GATEWAY_URL=${{ secrets.VITE_API_GATEWAY_URL }}
+            GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+            APP_URL=${{ secrets.APP_URL }}
+          # Cache từ Docker Hub để build nhanh hơn
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      # ── Tóm tắt kết quả ─────────────────────────────────
+      - name: Summary
+        run: |
+          echo "## 🚀 Docker Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.IMAGE_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Run container:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -d -p 80:80 ${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

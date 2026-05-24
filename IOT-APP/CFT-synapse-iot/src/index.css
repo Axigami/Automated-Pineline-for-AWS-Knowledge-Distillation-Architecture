@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+/* Leaflet Dark Theme Overrides & Z-Index Fix */
+.leaflet-container {
+  z-index: 0 !important;
+}
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background-color: #0f172a !important;
+  color: #f1f5f9 !important;
+  border: 1px solid #1e293b;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+}
+.leaflet-popup-content p {
+  margin: 0;
+}
+.custom-popup .text-slate-900 {
+  color: #f1f5f9; /* Override inline popup color for dark mode */
+}

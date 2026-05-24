@@ -1,0 +1,49 @@
+# ─── Loại bỏ các file không cần thiết khi build Docker ───
+# Giúp build context nhỏ hơn → build nhanh hơn
+
+# Dependencies (sẽ được cài lại trong container)
+node_modules/
+
+# Build output (sẽ được tạo mới trong container)
+dist/
+
+# Git
+.git/
+.gitignore
+
+# Env files (KHÔNG đưa secrets vào image)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test & coverage
+coverage/
+.nyc_output/
+
+# Docs (không cần trong runtime)
+docs/
+*.md
+!README.md
+
+# CI/CD (không cần trong image)
+.github/
+
+# Temp files
+*.txt
+tsc_errors*
+ts-errors*
+DB_review*

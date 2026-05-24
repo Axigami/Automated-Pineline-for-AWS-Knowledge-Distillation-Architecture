@@ -1,0 +1,1 @@
+export { useModelInsights } from './useModelInsights';

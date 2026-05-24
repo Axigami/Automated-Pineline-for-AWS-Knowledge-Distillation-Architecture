@@ -1,0 +1,6 @@
+﻿src/modules/live-monitor/controller/useLiveMonitor.ts(60,20): error TS2352: Conversion of type 'GenericStringError[]' to type 'FlowRow[]' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ error: true; } & String' is missing the following properties from type 'FlowRow': flow_id, flow_ts, flow_protocol, flow_src_ip, and 12 more.
+src/modules/live-monitor/controller/useLiveMonitor.ts(81,21): error TS2352: Conversion of type 'GenericStringError[]' to type 'AlertRow[]' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ error: true; } & String' is missing the following properties from type 'AlertRow': alert_id, alert_first_seen_at, alert_threat_type, alert_severity, and 9 more.
+src/modules/live-monitor/controller/useLiveMonitor.ts(99,41): error TS2352: Conversion of type 'GenericStringError' to type 'EdgeNodeRow' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ error: true; } & String' is missing the following properties from type 'EdgeNodeRow': id, node_code, status, current_cpu_percent, and 4 more.

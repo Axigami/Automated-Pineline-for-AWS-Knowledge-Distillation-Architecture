@@ -1,0 +1,24 @@
+0000000000000000000000000000000000000000 f8023ee0f32bb0e4076740ae9043449b7a03349e Phương Nguyễn <pn66301@gmail.com> 1773802385 +0700	clone: from https://github.com/PoeenCy/CFT-synapse-iot.git
+f8023ee0f32bb0e4076740ae9043449b7a03349e b8f2c3f47c598c3d0a1b01611a2b373516633b71 Phương Nguyễn <pn66301@gmail.com> 1774747019 +0700	commit: vibe
+b8f2c3f47c598c3d0a1b01611a2b373516633b71 229049ab4f5c23aaafe04ec63b2e5717baec7acf Phương Nguyễn <pn66301@gmail.com> 1774747732 +0700	commit (merge): Merge branch 'main' of https://github.com/PoeenCy/CFT-synapse-iot
+229049ab4f5c23aaafe04ec63b2e5717baec7acf 8a1b29323f9c1471e3d1cd74a38b18fe7da28ed5 Phương Nguyễn <pn66301@gmail.com> 1774877932 +0700	commit: ketnoidatabase
+8a1b29323f9c1471e3d1cd74a38b18fe7da28ed5 191146df82f611f0d5668c3fda01547b1fb49259 Phương Nguyễn <pn66301@gmail.com> 1775697163 +0700	commit: suabug
+191146df82f611f0d5668c3fda01547b1fb49259 a28756322e898a36e734977d0d68bd3b87961a1c Phương Nguyễn <pn66301@gmail.com> 1777287180 +0700	commit: fixcode
+a28756322e898a36e734977d0d68bd3b87961a1c 7218d841e7bbfbcbd265c6469261a84313d2cbbd Phương Nguyễn <pn66301@gmail.com> 1777287601 +0700	commit (merge): fix
+7218d841e7bbfbcbd265c6469261a84313d2cbbd 27048344f205dbd342ad125720aec271de7fe9b5 Phương Nguyễn <pn66301@gmail.com> 1777792961 +0700	commit: aduvip
+27048344f205dbd342ad125720aec271de7fe9b5 bc58659f22cd0388162d8f5effab5cc117d6aa47 Phương Nguyễn <pn66301@gmail.com> 1778039140 +0700	commit: addlogic
+bc58659f22cd0388162d8f5effab5cc117d6aa47 0e789325aae2156a3cdfc1f169a7f3a3ab9e689b Phương Nguyễn <pn66301@gmail.com> 1778051610 +0700	commit: codeupdate
+0e789325aae2156a3cdfc1f169a7f3a3ab9e689b 21f0d276174aaa7f4c478e88bfa434f1c4563811 Phương Nguyễn <pn66301@gmail.com> 1778075564 +0700	commit: code
+21f0d276174aaa7f4c478e88bfa434f1c4563811 b462cd77c340aa4adcfec28ecbbc7942d09115c3 Phương Nguyễn <pn66301@gmail.com> 1778075758 +0700	commit (merge): Merge branch 'main' of https://github.com/PoeenCy/CFT-synapse-iot
+b462cd77c340aa4adcfec28ecbbc7942d09115c3 4915af7a297deb7daab4f0c8b705f4ce99e13a7c Phương Nguyễn <pn66301@gmail.com> 1778076289 +0700	commit: LMAO
+4915af7a297deb7daab4f0c8b705f4ce99e13a7c e6108b5a89c82076942f825a03a1341a0fa85f8f Phương Nguyễn <pn66301@gmail.com> 1778402411 +0700	commit: addcode
+e6108b5a89c82076942f825a03a1341a0fa85f8f fc97a26094aded1833fc83c2a22b354fbf2c6628 Phương Nguyễn <pn66301@gmail.com> 1778402460 +0700	commit: addcode
+fc97a26094aded1833fc83c2a22b354fbf2c6628 ff1e52c4a41647fd61ec815398ab63ca1d8cc233 Phương Nguyễn <pn66301@gmail.com> 1778402544 +0700	commit (merge): Merge branch 'main' of https://github.com/PoeenCy/CFT-synapse-iot
+ff1e52c4a41647fd61ec815398ab63ca1d8cc233 5224d4d919ec83efdb81fc409b0221566a06e74b Phương Nguyễn <pn66301@gmail.com> 1778484349 +0700	commit: addcode
+5224d4d919ec83efdb81fc409b0221566a06e74b 5b49172c95ccce525d7a180b3df843f642213fbd Phương Nguyễn <pn66301@gmail.com> 1778484362 +0700	commit: addcode
+5b49172c95ccce525d7a180b3df843f642213fbd 00104707a34ba96226dbc5343637ac6bffda7aec Phương Nguyễn <pn66301@gmail.com> 1778485964 +0700	commit: addcode
+00104707a34ba96226dbc5343637ac6bffda7aec 8ff40084f50305fcf76aa76818dc80028350bdfb Phương Nguyễn <pn66301@gmail.com> 1778486002 +0700	commit: addcode
+8ff40084f50305fcf76aa76818dc80028350bdfb b76dd084063880598dd38a361916a9c02a6c33ab Phương Nguyễn <pn66301@gmail.com> 1778747593 +0700	commit: addcode
+b76dd084063880598dd38a361916a9c02a6c33ab aae0e6f424738c56c829e968b2b7c2342e23cbe5 Phương Nguyễn <pn66301@gmail.com> 1778747621 +0700	commit: addcode
+aae0e6f424738c56c829e968b2b7c2342e23cbe5 6222f86e95522a317dbc56a2524c8e7b92d9f52c Phương Nguyễn <pn66301@gmail.com> 1778747656 +0700	commit: addcode
+6222f86e95522a317dbc56a2524c8e7b92d9f52c b3e070957f92545716643dc112b01dc82a45ea60 Phương Nguyễn <pn66301@gmail.com> 1778837230 +0700	commit: addcode

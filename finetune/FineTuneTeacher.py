@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 # =============================================================
-# Fine-Tune Teacher CNN - FIXED VERSION
+# Fine-Tune Teacher CNN-LSTM - 7-CLASS SEQUENCE MODEL
+# =============================================================
+# 
+# Model Architecture:
+# - Input: (batch, 10, 75, 1) - sequences of 10 flows
+# - Output: (batch, 7) - window-level predictions
+# - Classes: Benign, Botnet, BruteForce, DDoS, DoS, PortScan, WebAttack
+#
 # =============================================================
 
 import os
@@ -20,21 +27,43 @@ sm_client     = boto3.client('sagemaker')
 lambda_client = boto3.client('lambda')
 
 BUCKET           = os.environ.get('BUCKET', 'anomalytraffic')
-TEACHER_S3_KEY   = 'models/cloud/model.tar.gz'
+TEACHER_S3_KEY   = 'models/cloud/teacher_interleaved_multitask_best.keras'
 ENDPOINT_NAME    = os.environ.get('TEACHER_ENDPOINT', 'tf-endpoint')
 DISTILL_FUNCTION = os.environ.get('DISTILL_FUNCTION', 'TriggerDistillation')
+SCALER_KEY       = 'data/raw/log/scaler_stats.json'
 
-CLASS_NAMES = ['Benign', 'Botnet', 'DDoS', 'DoS', 'PortScan']
+CLASS_NAMES = ['Benign', 'Botnet', 'BruteForce', 'DDoS', 'DoS', 'PortScan', 'WebAttack']
 N_CLASSES   = len(CLASS_NAMES)
-INPUT_SHAPE = (75, 1)
+WINDOW_SIZE = 10  # Sequence length (10 flows per window)
+
+# Load feature count dynamically from scaler
+_scaler_cache = None
+
+def get_n_features():
+    """Load feature count from scaler_stats.json"""
+    global _scaler_cache
+    if _scaler_cache is None:
+        try:
+            obj = s3_client.get_object(Bucket=BUCKET, Key=SCALER_KEY)
+            _scaler_cache = json.loads(obj['Body'].read())
+            print(f"✅ Scaler loaded: {_scaler_cache['n_features']} features")
+        except Exception as e:
+            print(f"⚠️ Failed to load scaler, defaulting to 75 features: {e}")
+            _scaler_cache = {'n_features': 75}
+    return _scaler_cache['n_features']
+
+N_FEATURES = get_n_features()
+INPUT_SHAPE = (WINDOW_SIZE, N_FEATURES, 1)
 
 print("=" * 70)
-print("🔥 FineTuneTeacher - FIXED VERSION")
+print("🔥 FineTuneTeacher - 7-CLASS SEQUENCE MODEL")
 print("=" * 70)
 print(f"Python: {sys.version}")
 print(f"TensorFlow: {tf.__version__}")
 print(f"Bucket: {BUCKET}")
 print(f"Teacher endpoint: {ENDPOINT_NAME}")
+print(f"Classes: {N_CLASSES} - {CLASS_NAMES}")
+print(f"Input shape: {INPUT_SHAPE}")
 print("=" * 70)
 
 
@@ -66,7 +95,17 @@ def parse_args():
 
 
 def load_data(data_dir):
-    """Load and prepare training data from CSV"""
+    """
+    Load and prepare training data from CSV.
+    
+    For the new 7-class sequence model:
+    - Input: CSV with 'label' + 75 feature columns
+    - Output: X shape (N, 10, 75, 1) - sequences of 10 flows
+            y shape (N, 7) - one-hot encoded labels
+    
+    Strategy: Create sequences by grouping consecutive rows into windows of 10.
+    If data < 10 rows, pad with zeros. Use window-level label (last flow's label).
+    """
     print(f"\n📂 Loading data from: {data_dir}")
     
     # Check directory exists
@@ -81,12 +120,16 @@ def load_data(data_dir):
     
     print(f"📋 Found {len(csv_files)} CSV file(s)")
     
-    # Load first CSV
-    csv_path = os.path.join(data_dir, csv_files[0])
-    print(f"📄 Loading: {csv_path}")
+    # Load all CSVs and concatenate
+    dfs = []
+    for csv_file in csv_files:
+        csv_path = os.path.join(data_dir, csv_file)
+        print(f"📄 Loading: {csv_path}")
+        df = pd.read_csv(csv_path)
+        dfs.append(df)
     
-    df = pd.read_csv(csv_path)
-    print(f"✅ Loaded shape: {df.shape}")
+    df = pd.concat(dfs, ignore_index=True)
+    print(f"✅ Total loaded shape: {df.shape}")
     print(f"📊 Columns: {list(df.columns)[:10]}...")  # Show first 10 cols
     
     # Check for label column
@@ -102,47 +145,100 @@ def load_data(data_dir):
     print(f"🔢 Feature columns: {len(feature_cols)}")
     
     # Extract features
-    X = df[feature_cols].astype('float32').values
+    X_flat = df[feature_cols].astype('float32').values
     
-    # Pad or truncate to 75 features
-    n_feat = X.shape[1]
-    print(f"📐 Original features: {n_feat}, target: 75")
+    # Validate feature count matches scaler
+    n_feat = X_flat.shape[1]
+    print(f"📐 CSV features: {n_feat}, scaler expects: {N_FEATURES}")
     
-    if n_feat < 75:
-        pad_width = 75 - n_feat
-        print(f"  ➕ Padding with {pad_width} zeros")
-        pad = np.zeros((X.shape[0], pad_width), dtype='float32')
-        X = np.hstack([X, pad])
-    elif n_feat > 75:
-        print(f"  ✂️ Truncating from {n_feat} to 75")
-        X = X[:, :75]
-    
-    # Reshape to (N, 75, 1)
-    X = X.reshape(X.shape[0], 75, 1)
+    if n_feat != N_FEATURES:
+        print(f"⚠️ Feature count mismatch!")
+        if n_feat < N_FEATURES:
+            pad_width = N_FEATURES - n_feat
+            print(f"  ➕ Padding with {pad_width} zeros")
+            pad = np.zeros((X_flat.shape[0], pad_width), dtype='float32')
+            X_flat = np.hstack([X_flat, pad])
+        else:
+            print(f"  ✂️ Truncating from {n_feat} to {N_FEATURES}")
+            X_flat = X_flat[:, :N_FEATURES]
+    else:
+        print(f"✅ Feature count matches scaler")
     
     # Extract labels
     y_raw = df['label'].values.astype(int)
     
     # Validate label range
     unique_labels = np.unique(y_raw)
-    print(f"📊 Unique labels: {unique_labels}")
+    print(f"📊 Unique labels in data: {unique_labels}")
     
     if np.max(y_raw) >= N_CLASSES:
         raise RuntimeError(f"❌ Invalid label {np.max(y_raw)} (max should be {N_CLASSES-1})")
     
-    # One-hot encode
-    y = tf.keras.utils.to_categorical(y_raw, num_classes=N_CLASSES)
+    # ========================================
+    # Create Sequences (Tumbling Window)
+    # ========================================
+    print(f"\n🔄 Creating sequences (window size: {WINDOW_SIZE})...")
     
-    print(f"✅ X: {X.shape}, y: {y.shape}")
-    print(f"📊 Label distribution:")
-    for label, count in zip(*np.unique(y_raw, return_counts=True)):
-        print(f"  Class {label} ({CLASS_NAMES[label]}): {count} samples")
+    n_samples = len(X_flat)
+    n_windows = n_samples // WINDOW_SIZE
     
-    return X, y, y_raw
+    if n_samples < WINDOW_SIZE:
+        print(f"⚠️ Only {n_samples} samples, padding to create 1 window")
+        # Pad to create one window
+        pad_len = WINDOW_SIZE - n_samples
+        X_padded = np.vstack([
+            np.zeros((pad_len, N_FEATURES), dtype='float32'),
+            X_flat
+        ])
+        y_padded = np.concatenate([
+            np.zeros(pad_len, dtype=int),  # Pad with Benign (0)
+            y_raw
+        ])
+        
+        X_seq = X_padded.reshape(1, WINDOW_SIZE, N_FEATURES, 1)
+        y_window = np.array([y_raw[-1]])  # Use last label
+        
+    else:
+        # Tumbling window: non-overlapping windows
+        remainder = n_samples % WINDOW_SIZE
+        
+        if remainder > 0:
+            print(f"  ℹ️ Dropping last {remainder} samples to fit window size")
+            X_flat = X_flat[:n_samples - remainder]
+            y_raw = y_raw[:n_samples - remainder]
+            n_samples = len(X_flat)
+            n_windows = n_samples // WINDOW_SIZE
+        
+        # Reshape into windows
+        X_seq = X_flat.reshape(n_windows, WINDOW_SIZE, N_FEATURES, 1)
+        
+        # Window label = last flow's label in each window
+        y_window = y_raw.reshape(n_windows, WINDOW_SIZE)[:, -1]
+    
+    print(f"✅ Created {len(X_seq)} windows")
+    print(f"   X shape: {X_seq.shape}")  # (N_windows, 10, 75, 1)
+    print(f"   y shape: {y_window.shape}")  # (N_windows,)
+    
+    # One-hot encode window labels
+    y = tf.keras.utils.to_categorical(y_window, num_classes=N_CLASSES)
+    
+    print(f"📊 Window label distribution:")
+    for label, count in zip(*np.unique(y_window, return_counts=True)):
+        print(f"  Class {label} ({CLASS_NAMES[label]}): {count} windows")
+    
+    return X_seq, y, y_window
 
 
 def load_teacher_model():
-    """Download and load teacher model from S3"""
+    """
+    Download and load teacher model from S3.
+    
+    The new model is a multi-task model with 2 outputs:
+    - flow_output: (batch, 10, 7) - per-flow predictions
+    - window_output: (batch, 7) - per-window prediction
+    
+    For fine-tuning, we use the window_output head.
+    """
     print(f"\n📥 Downloading teacher model...")
     print(f"  Source: s3://{BUCKET}/{TEACHER_S3_KEY}")
     
@@ -159,22 +255,30 @@ def load_teacher_model():
             tar.extractall(extract_dir)
         print(f"✅ Extracted to: {extract_dir}")
         
-        # Find saved_model.pb
-        savedmodel_dir = None
+        # Find saved_model.pb or .keras file
+        model_path = None
         
-        # Check root directory first
-        if os.path.exists(os.path.join(extract_dir, "saved_model.pb")):
-            savedmodel_dir = extract_dir
-        else:
-            # Search subdirectories
+        # Check for .keras file first (new format)
+        for root, dirs, files in os.walk(extract_dir):
+            for file in files:
+                if file.endswith('.keras'):
+                    model_path = os.path.join(root, file)
+                    print(f"📂 Found .keras file: {model_path}")
+                    break
+            if model_path:
+                break
+        
+        # If not found, check for SavedModel format
+        if not model_path:
             for root, dirs, files in os.walk(extract_dir):
                 if "saved_model.pb" in files:
-                    savedmodel_dir = root
+                    model_path = root
+                    print(f"📂 Found SavedModel directory: {model_path}")
                     break
         
-        if not savedmodel_dir:
+        if not model_path:
             # Debug: show directory structure
-            print("❌ saved_model.pb not found!")
+            print("❌ Model file not found!")
             print("📂 Directory structure:")
             for root, dirs, files in os.walk(extract_dir):
                 level = root.replace(extract_dir, '').count(os.sep)
@@ -184,15 +288,52 @@ def load_teacher_model():
                 for file in files[:5]:  # Show first 5 files
                     print(f"{subindent}{file}")
             
-            raise RuntimeError(f"saved_model.pb not found in {extract_dir}")
+            raise RuntimeError(f"Model file not found in {extract_dir}")
         
-        print(f"📂 Loading SavedModel from: {savedmodel_dir}")
-        model = tf.keras.models.load_model(savedmodel_dir)
-        print(f"✅ Model loaded successfully")
+        print(f"📂 Loading model from: {model_path}")
+        full_model = tf.keras.models.load_model(model_path)
+        print(f"✅ Full model loaded successfully")
         
-        # Print model summary
-        print("\n📋 Model Summary:")
+        # Print model info
+        print("\n📋 Full Model Info:")
+        print(f"  Inputs: {[inp.name for inp in full_model.inputs]}")
+        print(f"  Outputs: {[out.name for out in full_model.outputs]}")
+        
+        # Check if multi-task model
+        if len(full_model.outputs) > 1:
+            print(f"\n🔀 Multi-task model detected ({len(full_model.outputs)} outputs)")
+            print(f"  Extracting window_output head for fine-tuning...")
+            
+            # Find window_output layer
+            try:
+                window_output = full_model.get_layer('window_output').output
+                model = tf.keras.Model(
+                    inputs=full_model.input,
+                    outputs=window_output,
+                    name='Teacher_WindowHead'
+                )
+                print(f"✅ Extracted window_output head")
+            except:
+                print(f"⚠️ Could not find 'window_output' layer, using last output")
+                model = tf.keras.Model(
+                    inputs=full_model.input,
+                    outputs=full_model.outputs[-1],
+                    name='Teacher_LastOutput'
+                )
+        else:
+            print(f"\n✅ Single-output model, using as-is")
+            model = full_model
+        
+        # Print final model summary
+        print("\n📋 Fine-tuning Model Summary:")
         model.summary()
+        
+        # Verify input/output shapes
+        print(f"\n🔍 Shape verification:")
+        print(f"  Expected input: {INPUT_SHAPE}")
+        print(f"  Model input: {model.input.shape[1:]}")
+        print(f"  Expected output: ({N_CLASSES},)")
+        print(f"  Model output: {model.output.shape[1:]}")
         
         return model
         
@@ -202,10 +343,23 @@ def load_teacher_model():
 
 
 def evaluate(model, X, y_raw, label=""):
-    """Evaluate model accuracy"""
+    """
+    Evaluate model accuracy on window-level predictions.
+    
+    Args:
+        model: Keras model with output shape (batch, 7)
+        X: Input sequences shape (batch, 10, 75, 1)
+        y_raw: Window labels shape (batch,)
+        label: Description string
+    """
     print(f"\n📊 Evaluating {label}...")
     
     y_pred = model.predict(X, verbose=0)
+    
+    # Handle multi-output models (just in case)
+    if isinstance(y_pred, list):
+        y_pred = y_pred[-1]  # Use last output
+    
     y_pred_class = np.argmax(y_pred, axis=1)
     
     accuracy = np.mean(y_pred_class == y_raw)
@@ -218,6 +372,8 @@ def evaluate(model, X, y_raw, label=""):
         if mask.sum() > 0:
             cls_acc = np.mean(y_pred_class[mask] == i)
             print(f"    {cls:12} : {cls_acc:.4f} (n={mask.sum()})")
+        else:
+            print(f"    {cls:12} : N/A (no samples)")
     
     return accuracy
 
@@ -271,15 +427,28 @@ def fine_tune(model, X_tr, y_tr, X_val, y_val, args):
 
 
 def upload_new_model(model, args):
-    """Package and upload new model to S3"""
+    """
+    Package and upload new model to S3.
+    
+    Saves the window-head model (not the full multi-task model).
+    This ensures the endpoint serves only window predictions.
+    """
     print("\n📦 Packaging new model...")
     
     save_dir = "/tmp/new_teacher_model"
     tar_path = "/tmp/new_teacher_model.tar.gz"
     
-    # Save model as SavedModel format
-    tf.saved_model.save(model, save_dir)
-    print(f"✅ Saved to: {save_dir}")
+    # Save model in Keras format (.keras) - recommended for TF 2.x
+    keras_path = os.path.join(save_dir, "teacher_model.keras")
+    os.makedirs(save_dir, exist_ok=True)
+    
+    model.save(keras_path)
+    print(f"✅ Saved .keras format to: {keras_path}")
+    
+    # Also save as SavedModel for TensorFlow Serving compatibility
+    savedmodel_dir = os.path.join(save_dir, "savedmodel")
+    tf.saved_model.save(model, savedmodel_dir)
+    print(f"✅ Saved SavedModel format to: {savedmodel_dir}")
     
     # Backup old model
     timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')

@@ -42,7 +42,7 @@ def get_route(key: str) -> dict:
         "conflict_rule": None
     }
 
-LABEL_MAP = {0: "Benign", 1: "Botnet", 2: "DDoS", 3: "DoS", 4: "PortScan"}
+LABEL_MAP = {0: "Benign", 1: "Botnet", 2: "BruteForce", 3: "DDoS", 4: "DoS", 5: "PortScan", 6: "WebAttack"}
 
 APP_CAT_MAP = {
     "Advertisement":  0,  "Chat":           1,  "Cloud":          2,
@@ -99,22 +99,27 @@ def engineer_features(flow: dict) -> dict:
         if isinstance(v, (int, float)):
             feat[k] = float(v)
 
+    # Derived ratios
     feat["pkt_per_byte_ratio"]  = bi_pkts  / (bi_bytes  + 1e-9)
     feat["flow_symmetry"]       = s2d_pkts / (s2d_pkts + d2s_pkts + 1e-9)
     feat["byte_symmetry"]       = s2d_bytes/ (s2d_bytes + d2s_bytes + 1e-9)
 
+    # SYN ratios
     feat["bidirectional_syn_ratio"] = _g(flow, "bidirectional_syn_packets") / (bi_pkts + 1e-9)
     feat["src2dst_syn_ratio"]       = _g(flow, "src2dst_syn_packets")       / (s2d_pkts + 1e-9)
     feat["dst2src_syn_ratio"]       = _g(flow, "dst2src_syn_packets")       / (d2s_pkts + 1e-9)
 
+    # Flag ratios (all directions)
     for flag in ["ack", "psh", "rst", "fin", "cwr", "ece", "urg"]:
         feat[f"bidirectional_{flag}_ratio"] = \
             _g(flow, f"bidirectional_{flag}_packets") / (bi_pkts + 1e-9)
 
+    # Port features
     dp = int(_g(flow, "dst_port"))
     feat["dst_port_bucket"]        = float(_port_bucket(dp))
     feat["dst_port_is_well_known"] = float(feat["dst_port_bucket"] == 0)
 
+    # Application category
     cat_raw = flow.get("application_category_name", "Unspecified")
     feat["application_category_name"] = float(APP_CAT_MAP.get(str(cat_raw), -1))
     feat["application_confidence"]    = _g(flow, "application_confidence")
@@ -137,8 +142,34 @@ def standardize(vec: np.ndarray) -> np.ndarray:
     return (vec - mean) / (scale + 1e-9)
 
 def build_payload(vec_scaled: np.ndarray) -> str:
-    sample = [[float(v)] for v in vec_scaled]
-    return json.dumps({"inputs": [sample]})
+    """
+    Build payload for sequence model.
+    Model expects: (batch, 10, n_features, 1)
+    
+    Strategy: Replicate single flow 10 times to create a sequence.
+    This is acceptable for inference since we only care about the prediction.
+    """
+    # vec_scaled shape: (n_features,)
+    n_features = len(vec_scaled)
+    
+    # Ensure float32 (not float16/half)
+    vec_scaled = vec_scaled.astype(np.float32)
+    
+    # Reshape to (n_features, 1)
+    flow_2d = vec_scaled.reshape(n_features, 1)
+    
+    # Replicate 10 times to create sequence: (10, n_features, 1)
+    sequence = np.tile(flow_2d, (10, 1, 1))
+    
+    # Add batch dimension: (1, 10, n_features, 1)
+    # This is the correct 4D shape for CNN
+    batch_sequence = sequence[np.newaxis, ...]
+    
+    # Convert to list for JSON serialization
+    # Shape: [1, 10, n_features, 1]
+    sequence_list = batch_sequence.tolist()
+    
+    return json.dumps({"instances": sequence_list})
 
 def get_sm():
     global _sm
@@ -147,32 +178,72 @@ def get_sm():
     return _sm
 
 def predict(vec_scaled: np.ndarray) -> dict:
+    """
+    Call SageMaker endpoint for prediction.
+    
+    Model input: (batch, 10, n_features, 1) where n_features from scaler
+    Model output: 
+      - If multi-task: [[flow_output], [window_output]]
+      - If single: [window_output]
+    
+    We use window_output for final prediction.
+    """
     payload = build_payload(vec_scaled)
-    resp    = get_sm().invoke_endpoint(
-        EndpointName=SAGEMAKER_ENDPOINT,
-        ContentType="application/json",
-        Body=payload,
-    )
-    result = json.loads(resp["Body"].read())
-    preds  = result.get("predictions") or result.get("outputs") or []
-
-    if not preds:
-        logger.error(f"Empty predictions. Raw: {result}")
-        return {"error": "empty predictions", "raw": result}
-
-    probs     = np.array(preds[0], dtype=np.float32)
-    class_idx = int(np.argmax(probs))
-
-    return {
-        "label":       LABEL_MAP.get(class_idx, f"class_{class_idx}"),
-        "confidence":  round(float(probs[class_idx]), 4),
-        "probabilities": {
-            LABEL_MAP.get(i, f"c{i}"): round(float(p), 4)
-            for i, p in enumerate(probs)
-        },
-    }
+    
+    try:
+        resp = get_sm().invoke_endpoint(
+            EndpointName=SAGEMAKER_ENDPOINT,
+            ContentType="application/json",
+            Body=payload,
+        )
+        result = json.loads(resp["Body"].read())
+        
+        # Handle different response formats
+        preds = result.get("predictions") or result.get("outputs") or []
+        
+        if not preds:
+            logger.error(f"Empty predictions. Raw: {result}")
+            return {"error": "empty predictions", "raw": result}
+        
+        # Extract probabilities
+        # If multi-output: preds = [[flow_probs], [window_probs]]
+        # If single-output: preds = [window_probs]
+        if isinstance(preds[0], list) and len(preds[0]) > 1:
+            # Multi-output: take window_output (last output)
+            probs = np.array(preds[0][-1], dtype=np.float32)
+        elif isinstance(preds[0], list):
+            # Single nested list
+            probs = np.array(preds[0], dtype=np.float32)
+        else:
+            # Direct array
+            probs = np.array(preds, dtype=np.float32)
+        
+        # Validate number of classes
+        n_classes = len(LABEL_MAP)
+        if len(probs) != n_classes:
+            logger.error(f"Expected {n_classes} classes, got {len(probs)}: {probs}")
+            return {"error": f"invalid output shape: expected {n_classes}, got {len(probs)}"}
+        
+        class_idx = int(np.argmax(probs))
+        
+        return {
+            "label":       LABEL_MAP.get(class_idx, f"class_{class_idx}"),
+            "confidence":  round(float(probs[class_idx]), 4),
+            "probabilities": {
+                LABEL_MAP.get(i, f"c{i}"): round(float(p), 4)
+                for i, p in enumerate(probs)
+            },
+        }
+        
+    except Exception as e:
+        logger.error(f"Prediction error: {e}", exc_info=True)
+        return {"error": str(e)}
 
 def detect_conflict(prediction: dict, route: dict, flow: dict, source_key: str) -> bool:
+    """
+    Detect conflicts between expected and predicted labels.
+    Now supports 7 classes: Benign, Botnet, BruteForce, DDoS, DoS, PortScan, WebAttack
+    """
     expected_type = route.get("expected_type")
     if not expected_type:
         return False

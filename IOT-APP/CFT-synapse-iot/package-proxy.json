@@ -1,0 +1,14 @@
+{
+  "name": "mlops-cors-proxy",
+  "version": "1.0.0",
+  "description": "CORS proxy server for MLOps API Gateway",
+  "main": "proxy-server.js",
+  "scripts": {
+    "start": "node proxy-server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "node-fetch": "^2.7.0"
+  }
+}

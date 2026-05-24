@@ -1,0 +1,5 @@
+{
+  "name": "Synapse IoT",
+  "description": "A technical data aggregation and model refinement platform for IoT edge nodes, enabling technical users to process reports and feed feedback loops for autonomous model updates.",
+  "requestFramePermissions": []
+}

@@ -143,9 +143,17 @@ def lambda_handler(event, context):
     }
 
 
-# ── Relabeling logic ─────────────────────────────────────────────────────────
+# ── Relabeling logic (Updated for 7-class model) ────────────────────────────
 def determine_correct_label_route_based(expected_label, actual_label,
                                         conflict_rule, actual_confidence):
+    """
+    Relabeling logic for 7-class model:
+    - Benign, Botnet, BruteForce, DDoS, DoS, PortScan, WebAttack
+    """
+    
+    # Define valid attack types
+    ATTACK_TYPES = {'Botnet', 'BruteForce', 'DDoS', 'DoS', 'PortScan', 'WebAttack'}
+    
     # Rule 1: Anomaly source predicted as Benign → manual review
     if expected_label == "attack" and actual_label == "Benign":
         return {
@@ -154,9 +162,26 @@ def determine_correct_label_route_based(expected_label, actual_label,
             'reason':        'Anomaly source predicted as Benign - needs manual labeling',
             'needs_review':  True
         }
+    
+    # Rule 2: Anomaly source predicted as specific attack → trust prediction if high confidence
+    if expected_label == "attack" and actual_label in ATTACK_TYPES:
+        if actual_confidence >= 0.85:
+            return {
+                'correct_label': actual_label,
+                'confidence':    'high',
+                'reason':        f'High-confidence prediction: {actual_label} ({actual_confidence:.2%})',
+                'needs_review':  False
+            }
+        else:
+            return {
+                'correct_label': actual_label,
+                'confidence':    'low',
+                'reason':        f'Low-confidence prediction: {actual_label} ({actual_confidence:.2%})',
+                'needs_review':  True
+            }
 
-    # Rule 2: Log source predicted as attack → correct to Benign
-    if expected_label == "Benign" and actual_label != "Benign":
+    # Rule 3: Log source predicted as attack → correct to Benign
+    if expected_label == "Benign" and actual_label in ATTACK_TYPES:
         return {
             'correct_label': 'Benign',
             'confidence':    'high',

@@ -1,0 +1,248 @@
+
+============================================================
+src/modules/dashboard/view/components/DashboardOverview.tsx
+============================================================
+UI sections in this file (mock variables): KPIS, ALERTS, ATTACK_DIST, NODES, FORENSIC_FLOWS, F1_HISTORY
+
+1) KPI cards
+- Total Devices / Online%:
+  - Use: edge_nodes
+    - Count: edge_nodes.id
+    - Online: edge_nodes.status (e.g. 'online') OR last_seen_at freshness
+- Active Alerts:
+  - Use: alerts_all
+    - Count: alerts_all.alert_id WHERE alerts_all.alert_status IN ('pending','verifying','confirmed')
+- Cloud AI Status / flows per min:
+  - Use: network_flows_feedback_all (or flow_inference)
+    - Rate: count(network_flows_feedback_all.flow_id) grouped by minute on network_flows_feedback_all.flow_ts
+- Data Drift Level:
+  - Use: homes.data_drift_alert_level (threshold) + your computed drift metric (not stored in DBML yet)
+- Security Score:
+  - Typically computed; not stored in DBML (derive from alerts + SLA + drift)
+
+2) Live Alert Feed list (ALERTS mock)
+- UI fields: id, time, threat, confidence, source
+  - Primary: alerts_all
+    - id           -> alerts_all.alert_id
+    - time         -> alerts_all.alert_first_seen_at (format to HH:mm:ss)
+    - threat       -> alerts_all.alert_threat_type
+    - confidence   -> alerts_all.alert_confidence
+    - source text  -> alerts_all.alert_source_text
+  - Better (normalized) source:
+    - alerts_all.alert_node_id -> edge_nodes.id -> edge_nodes.node_code
+
+3) Forensic View header
+- Alert ID / Source / Time: same as #2
+
+4) Forensic “Recent Flow Sequence (10 Steps)” table (FORENSIC_FLOWS mock)
+Two ways to store/retrieve:
+- A) Stored on alert as JSON (current DBML)
+  - alerts_all.alert_sequence_steps_json: array of 10 objects with:
+    - step_ts, step_src_ip, step_dst_ip, step_protocol, step_length, step_tcp_flags
+- B) Stored as flows and related to alert (not modeled as table; would require a link table if you want strict relational)
+
+If you use JSON approach, map:
+- Time     -> step_ts (or preformatted string)
+- Src IP   -> step_src_ip
+- Dst IP   -> step_dst_ip
+- Proto    -> step_protocol
+- Len      -> step_length
+- Flag     -> step_tcp_flags
+
+5) Attack Type Distribution (ATTACK_DIST mock)
+- Use: alerts_all
+  - Group by: alerts_all.alert_threat_type
+  - Count: alerts_all.alert_id
+
+6) Edge Node Fleet mini list (NODES mock: cpu/ram/temp)
+- Use: edge_nodes snapshot columns (fast listing)
+  - cpu -> edge_nodes.current_cpu_percent
+  - ram -> edge_nodes.current_ram_percent
+  - temp -> edge_nodes.current_temperature_c
+- Or from node_telemetry (normalized time-series)
+  - node_telemetry.cpu_percent / ram_percent / temperature_c WHERE ts is latest per node_id
+
+7) AI Performance Panel / F1 history (F1_HISTORY mock)
+- Use: model_versions.f1_score over time
+  - model_versions.created_at for x-axis
+  - model_versions.f1_score for y
+  - filter: model_versions.status = 'deployed' (or model kind)
+
+============================================================
+src/modules/live-monitor/view/components/LiveMonitor.tsx
+============================================================
+UI: realtime stream of flows + alert stack + edge-to-cloud sync status
+
+1) Dual-Stream Raw Data Table (flows state; Flow interface)
+- Use: network_flows_feedback_all (as the base flow log)
+  - timestamp -> network_flows_feedback_all.flow_ts
+  - protocol  -> network_flows_feedback_all.flow_protocol
+  - srcPort   -> network_flows_feedback_all.flow_src_port
+  - dstPort   -> network_flows_feedback_all.flow_dst_port
+  - duration  -> network_flows_feedback_all.flow_duration_s
+  - bytes     -> network_flows_feedback_all.flow_total_bytes
+  - isAnomaly -> network_flows_feedback_all.is_anomaly
+
+2) Active Sequence Radar (radarData mock)
+- Derived metric over time; suggested source:
+  - network_flows_feedback_all.anomaly_score (sliding window)
+
+3) Live Alert Stack (Alert interface: severity/status/verdict/sequence[])
+- Use: alerts_all
+  - id         -> alerts_all.alert_id
+  - time       -> alerts_all.alert_first_seen_at
+  - threat     -> alerts_all.alert_threat_type
+  - severity   -> alerts_all.alert_severity ('critical'/'warning')
+  - status     -> alerts_all.alert_status ('pending','verifying','confirmed','false-positive')
+  - verdict    -> alerts_all.alert_verdict_text
+  - sequence[] -> alerts_all.alert_sequence_values_json (array[10] numbers)
+
+4) Edge-to-Cloud Sync widget (CPU/Temp/Latency)
+- From node/telemetry:
+  - node_telemetry.cpu_percent / temperature_c / latency_ms (latest)
+  - optionally cached into edge_nodes.current_* columns
+
+============================================================
+src/modules/threat-analytics/view/components/ThreatAnalytics.tsx
+============================================================
+UI: search + charts + raw network logs table + confirm/false-positive actions
+
+1) Raw Network Logs table (RAW_LOGS mock)
+- Use: network_flows_feedback_all
+  - timestamp  -> flow_ts
+  - srcIp      -> flow_src_ip
+  - dstPort    -> flow_dst_port
+  - duration   -> flow_duration_s
+  - inBytes    -> flow_in_bytes
+  - outBytes   -> flow_out_bytes
+  - flags      -> flow_tcp_flags
+  - predicted  -> predicted_label OR flow_inference.predicted_label (if you keep inference separate)
+
+2) Confirm/False Positive actions
+- Use: network_flows_feedback_all feedback fields
+  - feedback_action      -> network_flows_feedback_all.feedback_action
+  - feedback_true_label  -> network_flows_feedback_all.feedback_true_label
+  - feedback_note        -> network_flows_feedback_all.feedback_note
+  - feedback_user_id     -> network_flows_feedback_all.feedback_user_id
+  - feedback_created_at  -> network_flows_feedback_all.feedback_created_at
+
+============================================================
+src/modules/model-insights/view/components/ModelInsights.tsx
+============================================================
+UI: forensic flow verdict + 10-step timeline + “human-in-the-loop” corrections + cluster/entropy (mock)
+
+1) Forensic Flow Verdict (selectedFlow in MOCK_SEQUENCE)
+- Best source: network_flows_feedback_all + (optional) flow_inference
+  - protocol     -> flow_protocol
+  - srcPort      -> flow_src_port
+  - dstPort      -> flow_dst_port
+  - anomalyScore -> anomaly_score
+  - logic        -> inference_logic
+  - timestamp    -> flow_ts (format)
+
+2) Human feedback overrides (Feedback & Correction Override)
+- Use: network_flows_feedback_all feedback fields (same as Threat Analytics)
+
+3) “Historical Attack Intelligence” table (MOCK_HISTORICAL_ATTACKS)
+- Use: alerts_all (attack-like events)
+  - timestamp  -> alert_first_seen_at
+  - type       -> alert_threat_type
+  - confidence -> alert_confidence
+  - severity   -> alert_severity
+  - source ip  -> alert_source_ip (if populated) OR join via related flow/log
+  - target ip  -> alert_target_ip
+
+4) Cluster/Entropy/Heatmap
+- Currently mock-only; not directly stored in DBML
+- If you want persistent analytics: you’d add dedicated tables (out of scope if “no new tables”)
+
+============================================================
+src/modules/mlops/view/components/MLOpsHub.tsx
+============================================================
+UI: model comparison audit + distillation metrics + pipeline steps + version history
+
+1) Radar/comparison metrics
+- Use: model_versions columns
+  - f1_score, precision, recall, latency_ms, memory_mb, false_positive_rate, throughput_per_s
+- Or store full metrics blob in model_versions.metrics_json (already exists)
+
+2) Version history table (MOCK_VERSION_HISTORY)
+- Use: model_versions
+  - version    -> model_versions.version
+  - timestamp  -> model_versions.created_at
+  - accuracy   -> model_versions.accuracy
+  - status     -> model_versions.status ('deployed','archived','failed')
+  - author     -> model_versions.author
+
+3) Pipeline steps (PIPELINE_STEPS mock)
+- If you persist pipeline state:
+  - retrain_jobs_all.job_pipeline_steps_json (array of {id,name,status})
+
+============================================================
+src/modules/mlops/view/components/ModelRetraining.tsx
+============================================================
+UI: retraining configuration + progress stepper + teacher/student version badges
+
+1) Retraining job core
+- Use: retrain_jobs_all
+  - job_status, job_epochs, job_data_range, job_progress_percent
+  - job_started_at, job_finished_at, job_created_at
+  - job_knowledge_distillation (toggle)
+  - teacher/student versions: job_teacher_*_version_id / job_student_*_version_id -> model_versions.id
+
+2) Training configuration inputs (batch size / learning rate)
+- Use: retrain_jobs_all.job_training_batch_size / job_training_learning_rate
+
+3) Progress stepper events
+- Use: retrain_jobs_all.job_pipeline_steps_json (array)
+- Existing single event columns (event_* in retrain_jobs_all) can store the “latest” event snapshot
+
+============================================================
+src/modules/settings/view/components/SettingsThresholds.tsx
+============================================================
+UI: confidence threshold + drift level sliders (per home)
+
+- Use: homes
+  - confidence threshold -> homes.cloud_verification_confidence_threshold
+  - drift alert level    -> homes.data_drift_alert_level
+
+Note: the mock also displays “broker endpoint / last heartbeat / connectivity”
+- Broker endpoint is not in DBML; could be added to homes or edge_nodes if desired
+
+============================================================
+src/modules/fleet-mgmt/view/components/EdgeFleetManagement.tsx
+============================================================
+UI: node cards with cpu/ram/latency/version/status/location/framework
+
+- Use: edge_nodes
+  - id/code      -> edge_nodes.node_code
+  - status       -> edge_nodes.status
+  - location     -> edge_nodes.location_text
+  - version      -> edge_nodes.model_version_text OR join deployed_model_version_id -> model_versions.version
+  - framework    -> edge_nodes.framework
+  - cpu/ram/temp/latency snapshot:
+    - edge_nodes.current_cpu_percent/current_ram_percent/current_temperature_c/current_latency_ms
+  - IP           -> edge_nodes.ip_address
+  - last seen    -> edge_nodes.last_seen_at
+
+- Telemetry time-series (sparklines) (mock sparkline):
+  - Use node_telemetry for historical chart data
+
+============================================================
+src/modules/reports/view/components/ReportingAuditLogs.tsx
+============================================================
+UI: audit log table with timestamp/user/action/target/status
+
+Since DBML avoids creating a dedicated audit table, suggested storage:
+- Use audit fields attached to domain tables and UNION them in reporting queries:
+  - alerts_all.audit_* (for alert actions)
+  - retrain_jobs_all.audit_* (for retrain actions)
+  - deployments_all.audit_* (for deployment actions)
+
+Fields:
+- timestamp -> *_audit_created_at
+- user      -> *_audit_user_display_name (or *_audit_user_email)
+- action    -> *_audit_action
+- target    -> *_audit_target
+- status    -> *_audit_status
+

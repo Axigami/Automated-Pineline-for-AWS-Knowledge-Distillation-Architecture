@@ -1,0 +1,42 @@
+# docker-compose.yml — Chạy app từ Docker Hub image
+# ─────────────────────────────────────────────────────────
+# Cách dùng:
+#   1. Tạo file .env (copy từ .env.example, điền giá trị thật)
+#   2. Chạy: docker compose up -d
+#   3. Truy cập: http://localhost:3000
+# ─────────────────────────────────────────────────────────
+
+services:
+  web:
+    # ── Đổi thành Docker Hub username của bạn ──────────
+    image: hoangphu20/cft-synapse-iot:latest
+    container_name: cft-synapse-iot
+    restart: unless-stopped
+
+    ports:
+      - "3000:80"       # host:3000 → container:80 (nginx)
+
+    # ── Biến môi trường ────────────────────────────────
+    # Lưu ý: Vite đã EMBED các biến VITE_* vào bundle lúc
+    # build. Các biến dưới đây chỉ cần nếu app có server-
+    # side runtime (ví dụ Express). Với SPA thuần thì
+    # các VITE_* đã được baked-in từ lúc CI build.
+    env_file:
+      - .env
+
+    # ── Health check ────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # ── Giới hạn tài nguyên (tùy chọn) ─────────────────
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 128M
+        reservations:
+          memory: 64M
