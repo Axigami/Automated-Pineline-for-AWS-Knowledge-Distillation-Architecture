@@ -104,6 +104,10 @@ export interface AlertUIModel {
   srcIp: string | null;
   nodeId: string | null;
   homeId: string;
+  isAggregated?: boolean;
+  aggregatedCount?: number;
+  aggregatedAlerts?: AlertUIModel[];
+  alert_sequence_values_json?: string | null;
 }
 
 // ─────────────── Edge Sync Status ───────────────

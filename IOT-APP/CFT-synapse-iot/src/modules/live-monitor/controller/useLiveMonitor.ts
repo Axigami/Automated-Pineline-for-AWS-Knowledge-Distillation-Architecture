@@ -49,6 +49,10 @@ export function useLiveMonitor() {
   const alertUpdateChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const edgeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
+  // Refs cho alert queue (batch Realtime alerts cùng lúc để React 18 batch không phá aggregation)
+  const alertQueueRef = useRef<AlertUIModel[]>([]);
+  const alertFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // ─────────────────────────────────────────────────────────────
   // INITIAL LOAD: Lấy lịch sử gần nhất khi mount
   // ─────────────────────────────────────────────────────────────
@@ -161,18 +165,30 @@ export function useLiveMonitor() {
     flowChannelRef.current = flowChannel;
 
     // ── Channel 2: alerts_all → INSERT ──
-    // Cảnh báo từ Cloud model (CNN-LSTM) phát hiện
+    // Dùng queue ref + flush timer để batch alerts đến gần nhau,
+    // tránh React 18 batching làm mất aggregation DoS/DDoS
+    const flushAlertQueue = () => {
+      if (alertQueueRef.current.length > 0) {
+        const batch = alertQueueRef.current.splice(0);
+        console.log(`[LiveMonitor] Flushing ${batch.length} queued alerts`);
+        storeRef.current.addAlertsBatch(batch);
+      }
+      alertFlushTimerRef.current = null;
+    };
+
     const alertChannel = supabase
       .channel('live_monitor_alerts')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'alerts_all' },
         (payload) => {
-          console.log('[LiveMonitor] New alert received:', payload);
           const row = payload.new as AlertRow;
           const alert = adaptAlertRow(row);
-          console.log('[LiveMonitor] Adding alert to UI:', alert.id);
-          storeRef.current.addAlert(alert);
+          
+          // Queue alert, flush after debounce to batch DoS/DDoS from same IP
+          alertQueueRef.current.push(alert);
+          if (alertFlushTimerRef.current) clearTimeout(alertFlushTimerRef.current);
+          alertFlushTimerRef.current = setTimeout(flushAlertQueue, 200);
         }
       )
       .subscribe((status) => {
@@ -334,12 +350,17 @@ export function useLiveMonitor() {
           console.error('[LiveMonitor] Polling alert error:', alertError);
         } else if (newAlerts && newAlerts.length > 0) {
           console.log(`[LiveMonitor] Polling found ${newAlerts.length} new alerts`);
-          // Reverse to add oldest first (maintains chronological order)
-          const alertsToAdd = (newAlerts as unknown as AlertRow[]).reverse();
-          alertsToAdd.forEach(row => {
-            const alert = adaptAlertRow(row);
-            storeRef.current.addAlert(alert); // addAlert has duplicate check
-          });
+          // Use batch to avoid React state update batching issues with DoS/DDoS grouping
+          const alertsToAdd = (newAlerts as unknown as AlertRow[])
+            .map(adaptAlertRow)
+            .filter(alert => {
+              const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
+              return new Date(alert.time).getTime() >= twentyFourHoursAgo;
+            })
+            .reverse();
+          if (alertsToAdd.length > 0) {
+            storeRef.current.addAlertsBatch(alertsToAdd);
+          }
         }
       } catch (error) {
         console.error('[LiveMonitor] Polling error:', error);

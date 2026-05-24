@@ -19,6 +19,59 @@ const EMPTY_RADAR_DATA: import('./types').RadarPoint[] = Array.from(
   (_, i) => ({ time: i, score: 0 })
 );
 
+// ─────────────── Pure helper: apply 1 alert to state (tránh React batch bug với polling) ───────────────
+
+function applyAlertToState(prev: AlertUIModel[], alert: AlertUIModel): AlertUIModel[] {
+  // Check for duplicates by ID
+  if (prev.some(a => a.id === alert.id)) {
+    return prev;
+  }
+
+  // Group DoS/DDoS alerts by source IP
+  const isDoSOrDDoS = alert.threat && alert.threat.toLowerCase().includes('dos');
+  const srcIp = alert.srcIp;
+  
+  if (isDoSOrDDoS && srcIp) {
+    // Find any existing alert (aggregated or not) with same IP within 5 min window
+    const existingIdx = prev.findIndex(a => 
+      a.srcIp === srcIp && 
+      a.threat && a.threat.toLowerCase().includes('dos') &&
+      (Date.now() - new Date(a.time).getTime() < 300000)
+    );
+
+    if (existingIdx !== -1) {
+      const next = [...prev];
+      const existing = next[existingIdx];
+      
+      if (existing.isAggregated) {
+        // Merge into existing group
+        next[existingIdx] = {
+          ...existing,
+          time: alert.time,
+          timeDisplay: alert.timeDisplay,
+          aggregatedCount: (existing.aggregatedCount || 1) + 1,
+          aggregatedAlerts: [alert, ...(existing.aggregatedAlerts || [])],
+          confidence: alert.confidence,
+          sequence: alert.sequence,
+          alert_sequence_values_json: alert.alert_sequence_values_json,
+        };
+      } else {
+        // Convert single alert + new alert into a group
+        next[existingIdx] = {
+          ...existing,
+          isAggregated: true,
+          aggregatedCount: 2,
+          aggregatedAlerts: [existing, alert],
+        };
+      }
+      return next;
+    }
+  }
+
+  const next = [alert, ...prev];
+  return next.length > 50 ? next.slice(0, 50) : next;
+}
+
 export function useLiveMonitorStore() {
   // ─── Legacy log entries (backward compat) ───
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -105,14 +158,17 @@ export function useLiveMonitorStore() {
       return;
     }
     
+    setAlerts((prev) => applyAlertToState(prev, alert));
+  }, []);
+
+  /** Thêm nhiều alert cùng lúc (dùng trong polling để tránh React batch bug) */
+  const addAlertsBatch = useCallback((newAlerts: AlertUIModel[]) => {
     setAlerts((prev) => {
-      // Check for duplicates
-      if (prev.some(a => a.id === alert.id)) {
-        console.log(`[LiveMonitor] Ignoring duplicate alert: ${alert.id}`);
-        return prev;
+      let current = prev;
+      for (const alert of newAlerts) {
+        current = applyAlertToState(current, alert);
       }
-      const next = [alert, ...prev];
-      return next.length > 50 ? next.slice(0, 50) : next;
+      return current;
     });
   }, []);
 
@@ -124,8 +180,31 @@ export function useLiveMonitorStore() {
       const alertTime = new Date(alert.time).getTime();
       return alertTime >= twentyFourHoursAgo;
     });
-    console.log(`[LiveMonitor] Filtered alerts: ${initialAlerts.length} → ${recentAlerts.length} (removed ${initialAlerts.length - recentAlerts.length} old alerts)`);
-    setAlerts(recentAlerts);
+    
+    // Group them initially
+    const grouped: AlertUIModel[] = [];
+    const dosGroups = new Map<string, AlertUIModel>();
+
+    recentAlerts.forEach(alert => {
+      const isDoSOrDDoS = alert.threat.toLowerCase().includes('dos');
+      if (isDoSOrDDoS && alert.srcIp) {
+        const key = alert.srcIp;
+        if (dosGroups.has(key)) {
+          const group = dosGroups.get(key)!;
+          group.aggregatedCount = (group.aggregatedCount || 1) + 1;
+          group.aggregatedAlerts = group.aggregatedAlerts || [];
+          group.aggregatedAlerts.push(alert);
+        } else {
+          dosGroups.set(key, { ...alert, isAggregated: true, aggregatedCount: 1, aggregatedAlerts: [alert] });
+          grouped.push(dosGroups.get(key)!);
+        }
+      } else {
+        grouped.push(alert);
+      }
+    });
+
+    console.log(`[LiveMonitor] Filtered and Grouped alerts: ${initialAlerts.length} → ${grouped.length}`);
+    setAlerts(grouped);
   }, []);
 
   /** Cập nhật trạng thái của 1 alert (verifying → confirmed/false-positive) */
@@ -185,7 +264,7 @@ export function useLiveMonitorStore() {
     // Flow stream
     flows, addFlow, setInitialFlows,
     // Alert stream
-    alerts, setAlerts, addAlert, setInitialAlerts, updateAlertStatus, upsertAlert,
+    alerts, setAlerts, addAlert, addAlertsBatch, setInitialAlerts, updateAlertStatus, upsertAlert,
     // Edge sync
     syncStatuses, setSyncStatuses,
     // Radar chart

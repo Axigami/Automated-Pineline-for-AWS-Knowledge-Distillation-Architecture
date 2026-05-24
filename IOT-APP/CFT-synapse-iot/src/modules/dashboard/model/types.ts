@@ -96,6 +96,10 @@ export interface AlertUIModel {
   locationName: string;  // e.g. "Smart Home A" or location_text
   alert_node_id: string | null;
   alert_home_id: string;
+  isAggregated?: boolean;
+  aggregatedCount?: number;
+  aggregatedAlerts?: AlertUIModel[];
+  alert_sequence_values_json?: string | null;
 }
 
 /**

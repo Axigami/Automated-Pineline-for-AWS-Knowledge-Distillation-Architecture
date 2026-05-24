@@ -56,6 +56,7 @@ export function adaptAlert(row: AlertRow): AlertUIModel {
     locationName,
     alert_node_id: row.alert_node_id ?? null,
     alert_home_id: row.alert_home_id,
+    alert_sequence_values_json: row.alert_sequence_values_json,
   };
 }
 

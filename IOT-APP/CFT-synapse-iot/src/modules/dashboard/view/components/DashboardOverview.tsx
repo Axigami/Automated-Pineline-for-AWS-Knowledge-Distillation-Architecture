@@ -439,6 +439,11 @@ const AlertItem: React.FC<{
       <div className="flex items-center justify-between mb-3">
         <span className={`font-black text-base tracking-tight ${isSelected ? 'text-blue-400' : severityColor(alert.severity)}`}>
           {alert.label}
+          {alert.isAggregated && (alert.aggregatedCount || 0) > 1 && (
+            <span className="ml-2 text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-700">
+              x{alert.aggregatedCount}
+            </span>
+          )}
         </span>
         <span className="text-slate-400 text-xs font-bold font-mono bg-slate-950/50 px-1.5 py-0.5 rounded">{alert.confidencePct}</span>
       </div>
@@ -708,8 +713,41 @@ const ForensicView: React.FC<{
             </h4>
           </div>
 
-          <div className="flex flex-col gap-6 flex-1">
-            {/* Verdict Card */}
+      {/* Sequence JSON prettified (show first record only) */}
+      {alert.alert_sequence_values_json && (
+        <div className="flex flex-col">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-base font-bold text-slate-100 flex items-center gap-2">
+              <Binary size={18} className="text-blue-400" /> {t('forensicTitleAdmin')}
+            </h4>
+          </div>
+          <div className="bg-slate-950/50 rounded-xl border border-slate-800 overflow-hidden flex-1 shadow-inner">
+            <div className="max-h-96 overflow-y-auto p-3">
+              {(() => {
+                try {
+                  const parsed = JSON.parse(alert.alert_sequence_values_json);
+                  const arr = Array.isArray(parsed) ? parsed : [parsed];
+                  const first = arr[0];
+                  return (
+                    <pre className="text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap break-all">
+                      {JSON.stringify(first, null, 2)}
+                    </pre>
+                  );
+                } catch {
+                  return (
+                    <pre className="text-xs font-mono text-slate-400 whitespace-pre-wrap break-all">
+                      {alert.alert_sequence_values_json}
+                    </pre>
+                  );
+                }
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-6 flex-1">
+        {/* Verdict Card */}
             <div className="bg-gradient-to-br from-slate-900 to-slate-950 rounded-xl border border-slate-800 p-8 relative overflow-hidden">
               <div className="absolute top-0 right-0 p-8 opacity-5">
                 <ShieldCheck size={160} className="text-emerald-500" />

@@ -3,6 +3,7 @@ import { supabase } from '../../../core/lib/supabaseClient';
 import { useAuthContext } from '../../../core/auth/AuthProvider';
 import { useDashboardStore } from '../model/store';
 import { adaptAlerts, getAttackColor } from '../model/adapter';
+import { aggregateAlerts } from '../model/alert-aggregation';
 import { useNotificationSound } from '../../../core/hooks/useNotificationSound';
 import {
   getDashboardCacheForUser,
@@ -12,7 +13,7 @@ import {
 } from '../model/cache';
 import type {
   AlertRow, TelemetrySummary, TrafficSeriesPoint,
-  EdgeNodeRow, AttackDistPoint, ModelStats, HomeInfo,
+  EdgeNodeRow, AttackDistPoint, ModelStats, HomeInfo, AlertUIModel,
 } from '../model/types';
 import type { DashboardCacheState } from '../model/cache';
 
@@ -183,7 +184,19 @@ export function useDashboard() {
     const adapted = adaptAlerts(enrichedRows as unknown as AlertRow[]);
     console.log('[Dashboard] Adapted alerts:', adapted);
     
-    return { recentAlerts: adapted };
+    // Group DoS/DDoS alerts by source IP
+    const aggregated = aggregateAlerts(adapted);
+    console.log('[Dashboard] Aggregated alerts:', aggregated);
+    
+    // Convert AggregatedAlert back to EnhancedAlertUIModel (which extends AlertUIModel)
+    const finalAlerts = aggregated.map(agg => ({
+      ...agg.alerts[0],
+      isAggregated: agg.isGroup,
+      aggregatedCount: agg.count,
+      aggregatedAlerts: agg.alerts,
+    }));
+    
+    return { recentAlerts: finalAlerts as unknown as AlertUIModel[] };
   };
 
   const fetchHomes = async (): Promise<Partial<{ homes: HomeInfo[] }>> => {

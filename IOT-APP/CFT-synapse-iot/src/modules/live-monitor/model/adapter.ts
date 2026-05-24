@@ -93,6 +93,7 @@ export function adaptAlertRow(row: AlertRow): AlertUIModel {
     srcIp: row.alert_source_ip ?? null,
     nodeId: row.alert_node_id ?? null,
     homeId: row.alert_home_id,
+    alert_sequence_values_json: row.alert_sequence_values_json,
   };
 }
 

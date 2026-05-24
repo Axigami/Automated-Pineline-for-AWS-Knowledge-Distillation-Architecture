@@ -230,6 +230,11 @@ const AlertCard: React.FC<AlertCardProps> = ({ alert, onVerify }) => {
           <div className="flex flex-col justify-center">
             <h5 className={`text-[15px] font-bold uppercase tracking-tight leading-none ${alert.severity === 'critical' ? 'text-rose-400' : 'text-amber-400'}`}>
               {alert.threat}
+              {alert.isAggregated && (alert.aggregatedCount || 0) > 1 && (
+                <span className="ml-2 text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-700">
+                  x{alert.aggregatedCount}
+                </span>
+              )}
             </h5>
             <p className="text-xs text-slate-500 font-mono leading-none mt-1.5">{alert.timeDisplay || alert.time}</p>
           </div>
@@ -246,9 +251,16 @@ const AlertCard: React.FC<AlertCardProps> = ({ alert, onVerify }) => {
 
       {/* Source IP if available */}
       {alert.srcIp && (
-        <p className="text-xs font-mono text-slate-500 mb-3">
-          <span className="text-slate-600 font-sans font-semibold mr-1">src:</span> {alert.srcIp}
-        </p>
+        <div className="mb-3">
+          <p className="text-xs font-mono text-slate-500">
+            <span className="text-slate-600 font-sans font-semibold mr-1">src:</span> {alert.srcIp}
+          </p>
+          {alert.alert_sequence_values_json && (
+            <p className="text-[10px] font-mono text-slate-600 mt-1 truncate max-w-full opacity-60">
+              {alert.alert_sequence_values_json}
+            </p>
+          )}
+        </div>
       )}
 
       <div className="mb-5">

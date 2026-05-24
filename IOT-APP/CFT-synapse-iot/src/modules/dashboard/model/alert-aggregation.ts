@@ -1,10 +1,3 @@
-/**
- * Alert Aggregation Service
- * 
- * Groups similar alerts together to reduce redundancy and improve clarity.
- * Alerts are grouped by source IP and attack type within a configurable time window.
- */
-
 import { AlertUIModel } from './types';
 import { AggregatedAlert, AggregationConfig, EnhancedAlertUIModel } from './enhanced-types';
 
@@ -39,8 +32,10 @@ export function aggregateAlerts(
 
   // 1. Sort alerts by timestamp (newest first)
   const sorted = [...alerts].sort((a, b) => {
-    const timeA = new Date(a.time).getTime();
-    const timeB = new Date(b.time).getTime();
+    // Note: Dashboard AlertUIModel.time is HH:MM:SS, but it might be full ISO in some contexts
+    // Or we should use a more reliable way to sort if they are all from the same day
+    const timeA = new Date(`1970-01-01T${a.time}`).getTime();
+    const timeB = new Date(`1970-01-01T${b.time}`).getTime();
     return timeB - timeA;
   });
 
@@ -49,8 +44,17 @@ export function aggregateAlerts(
   const groupKeys = new Map<string, number>(); // Track group counters for same key
 
   for (const alert of sorted) {
-    const baseKey = `${alert.srcIp}_${alert.label}`;
+    const isDoSOrDDoS = alert.label.toLowerCase().includes('dos');
+    // For DoS/DDoS, group only by source IP, regardless of whether it's 'dos' or 'ddos'
+    const baseKey = isDoSOrDDoS 
+      ? `${alert.srcIp}_DOS_GROUP` 
+      : `${alert.id}`;
     
+    if (!isDoSOrDDoS) {
+      groups.set(alert.id, [alert]);
+      continue;
+    }
+
     // Find existing group within time window
     let foundGroup = false;
     
@@ -59,7 +63,7 @@ export function aggregateAlerts(
       
       const latestInGroup = group[0];
       const timeDiff = Math.abs(
-        new Date(latestInGroup.time).getTime() - new Date(alert.time).getTime()
+        new Date(`1970-01-01T${latestInGroup.time}`).getTime() - new Date(`1970-01-01T${alert.time}`).getTime()
       );
       
       if (timeDiff <= config.timeWindowMs) {
@@ -111,7 +115,7 @@ export function convertToAggregated(
     count: 1,
     alerts: [alert],
     sourceIp: alert.srcIp,
-    targetIp: extractTargetIp(alert),
+    targetIp: alert.targetIp || alert.srcIp || 'Unknown',
     attackType: alert.label,
     severity: alert.severity,
     firstSeen: alert.time,
@@ -133,7 +137,7 @@ export function createAggregatedGroup(alerts: AlertUIModel[]): AggregatedAlert {
 
   // Sort by timestamp to get first and last
   const sortedByTime = [...alerts].sort((a, b) => {
-    return new Date(a.time).getTime() - new Date(b.time).getTime();
+    return new Date(`1970-01-01T${a.time}`).getTime() - new Date(`1970-01-01T${b.time}`).getTime();
   });
 
   const firstAlert = sortedByTime[0];
@@ -151,26 +155,13 @@ export function createAggregatedGroup(alerts: AlertUIModel[]): AggregatedAlert {
     count: alerts.length,
     alerts,
     sourceIp: firstAlert.srcIp,
-    targetIp: extractTargetIp(firstAlert),
+    targetIp: firstAlert.targetIp || firstAlert.srcIp || 'Unknown',
     attackType: firstAlert.label,
     severity,
     firstSeen: firstAlert.time,
     lastSeen: lastAlert.time,
     status: firstAlert.status,
   };
-}
-
-/**
- * Extract target IP from alert
- * Falls back to source IP if target IP is not available
- * 
- * @param alert - Alert object
- * @returns Target IP address
- */
-function extractTargetIp(alert: AlertUIModel): string {
-  // AlertUIModel doesn't have targetIp, so we'll need to add it
-  // For now, return a placeholder or derive from other fields
-  return (alert as any).targetIp || alert.srcIp || 'Unknown';
 }
 
 /**
@@ -225,8 +216,8 @@ export function sortAggregatedAlerts(alerts: AggregatedAlert[]): AggregatedAlert
     if (severityDiff !== 0) return severityDiff;
     
     // Then sort by timestamp (newest first)
-    const timeA = new Date(a.lastSeen).getTime();
-    const timeB = new Date(b.lastSeen).getTime();
+    const timeA = new Date(`1970-01-01T${a.lastSeen}`).getTime();
+    const timeB = new Date(`1970-01-01T${b.lastSeen}`).getTime();
     return timeB - timeA;
   });
 }
