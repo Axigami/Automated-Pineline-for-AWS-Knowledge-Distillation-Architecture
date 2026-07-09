@@ -2,7 +2,7 @@
 
 Hệ thống tự động phát hiện tấn công mạng sử dụng Knowledge Distillation: Model Teacher 7 lớp (cloud) → Model Student nhị phân (edge).
 
-## 🎯 Kiến Trúc
+## Kiến Trúc
 
 **Teacher (Cloud)**: CNN-LSTM 7 lớp → Benign, Botnet, BruteForce, DDoS, DoS, PortScan, WebAttack  
 **Student (Edge)**: LightGBM nhị phân → Benign vs Attack  
@@ -10,7 +10,7 @@ Hệ thống tự động phát hiện tấn công mạng sử dụng Knowledge 
 
 ---
 
-## 🚀 Triển Khai Nhanh
+## Triển Khai Nhanh
 
 ### 1. Deploy Model Teacher
 
@@ -40,7 +40,7 @@ Tất cả Lambda trong `Lambda code/` đã sẵn sàng:
 
 ---
 
-## ⚠️ Lỗi Thường Gặp & Cách Sửa
+## Lỗi Thường Gặp & Cách Sửa
 
 ### Lỗi CudnnRNN
 **Vấn đề**: Model train trên GPU không chạy được trên CPU instance  
@@ -52,9 +52,9 @@ Tất cả Lambda trong `Lambda code/` đã sẵn sàng:
 - Model CNN cần input 4D: `(batch, 10, n_features, 1)`
 
 **Giải pháp**: 
-- ✅ Lambda đã sửa - replicate single flow 10 lần tạo sequence
-- ✅ Add batch dimension: `sequence[np.newaxis, ...]` → shape `(1, 10, n_features, 1)`
-- ✅ Ensure float32: `vec_scaled.astype(np.float32)` tránh lỗi "half" precision
+- Lambda đã sửa - replicate single flow 10 lần tạo sequence
+- Add batch dimension: `sequence[np.newaxis, ...]` → shape `(1, 10, n_features, 1)`
+- Ensure float32: `vec_scaled.astype(np.float32)` tránh lỗi "half" precision
 
 ### Lỗi Data Type (half precision)
 **Vấn đề**: `Failed to write JSON value for tensor type: half`  
@@ -63,7 +63,7 @@ Tất cả Lambda trong `Lambda code/` đã sẵn sàng:
 ### Lỗi Feature Count Mismatch (66 vs 75)
 **Vấn đề**: Scaler có 66 features nhưng code hardcode 75 features  
 **Giải pháp**: 
-- ✅ Tất cả scripts tự động load từ `scaler_stats.json`
+- Tất cả scripts tự động load từ `scaler_stats.json`
 - Lambda: `build_payload()` dùng `len(vec_scaled)` (dynamic)
 - Training: `N_FEATURES = get_n_features()` load từ S3
 - Đảm bảo `scaler_stats.json` đã upload: `s3://anomalytraffic/data/raw/log/scaler_stats.json`
@@ -76,7 +76,7 @@ Tất cả Lambda trong `Lambda code/` đã sẵn sàng:
 
 ---
 
-## 📁 Cấu Trúc Project
+## Cấu Trúc Project
 
 ```
 .
@@ -111,7 +111,7 @@ Tất cả Lambda trong `Lambda code/` đã sẵn sàng:
 
 ---
 
-## 📊 Luồng Dữ Liệu
+## Luồng Dữ Liệu
 
 ```
 Edge Device → S3 (JSON) → Lambda
@@ -131,18 +131,18 @@ Edge Device → S3 (JSON) → Lambda
 
 ---
 
-## 🔑 Tính Năng Chính
+## Tính Năng Chính
 
-✅ Teacher 7 lớp phân loại chi tiết  
-✅ Student nhị phân nhanh cho edge  
-✅ Tương thích CPU (không cần GPU)  
-✅ Pipeline tự động học từ conflicts  
-✅ Phát hiện conflicts theo route  
-✅ Xử lý chuỗi thời gian  
+ Teacher 7 lớp phân loại chi tiết  
+ Student nhị phân nhanh cho edge  
+ Tương thích CPU (không cần GPU)  
+ Pipeline tự động học từ conflicts  
+ Phát hiện conflicts theo route  
+ Xử lý chuỗi thời gian  
 
 ---
 
-## 📝 Cấu Hình
+## Cấu Hình
 
 ### Biến Môi Trường (Lambda)
 ```bash
@@ -165,7 +165,7 @@ Format:
 }
 ```
 
-**⚠️ QUAN TRỌNG**: 
+**QUAN TRỌNG**: 
 - Tất cả scripts tự động load `n_features` từ file này
 - Không cần hardcode số lượng features
 - Nếu không tìm thấy, mặc định dùng 75 features
@@ -190,7 +190,7 @@ s3://anomalytraffic/
 
 ---
 
-## 🧪 Test
+## Test
 
 ```bash
 # Test endpoint (với 66 features từ scaler)
@@ -218,7 +218,7 @@ aws lambda invoke --function-name IOT-PROJECT --payload file://test.json respons
 
 ---
 
-## 📚 7 Lớp Phân Loại
+## 7 Lớp Phân Loại
 
 - **Benign** (0): Traffic bình thường
 - **Botnet** (1): Hoạt động botnet
@@ -230,7 +230,7 @@ aws lambda invoke --function-name IOT-PROJECT --payload file://test.json respons
 
 ---
 
-## 🔄 Vòng Lặp Cải Tiến
+## Vòng Lặp Cải Tiến
 
 1. Edge gửi flow data lên S3
 2. Lambda xử lý với teacher (7 lớp)
@@ -246,7 +246,7 @@ aws lambda invoke --function-name IOT-PROJECT --payload file://test.json respons
 
 ---
 
-## � Lưu Ý
+## Lưu Ý
 
 - **CPU vs GPU**: Luôn dùng `export_model_cpu_compatible.py` để deploy CPU
 - **Sequences**: Lambda nhân đôi single flow 10 lần - chấp nhận được cho inference
@@ -256,7 +256,7 @@ aws lambda invoke --function-name IOT-PROJECT --payload file://test.json respons
 
 ---
 
-## 📞 Debug
+## Debug
 
 Xem logs CloudWatch:
 ```bash
